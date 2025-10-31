@@ -1,0 +1,175 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: vividpages-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vividpages}
+      POSTGRES_USER: ${POSTGRES_USER:-vividpages}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vividpages}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache & Queue
+  redis:
+    image: redis:7-alpine
+    container_name: vividpages-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # MinIO Object Storage
+  minio:
+    image: minio/minio:latest
+    container_name: vividpages-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Backend API
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: ${BUILD_TARGET:-development}
+    container_name: vividpages-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-vividpages}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-vividpages}
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_BUCKET: ${MINIO_BUCKET:-vividpages}
+      JWT_SECRET: ${JWT_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
+    volumes:
+      - ./backend/src:/app/src
+      - /app/node_modules
+    ports:
+      - "${API_PORT:-4000}:4000"
+    networks:
+      - frontend-network
+      - backend-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: ${BUILD_TARGET:-development}
+    container_name: vividpages-frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:4000}
+      VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:4000}
+    volumes:
+      - ./frontend/src:/app/src
+      - /app/node_modules
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    networks:
+      - frontend-network
+
+  # Caddy Reverse Proxy (optional, for production)
+  # caddy:
+  #   image: caddy:2-alpine
+  #   container_name: vividpages-caddy
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - frontend
+  #     - api
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile
+  #     - caddy-data:/data
+  #     - caddy-config:/config
+  #   networks:
+  #     - frontend-network
+  #   environment:
+  #     DOMAIN: ${DOMAIN:-localhost}
+
+  # Ollama (Optional - Local LLM)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: vividpages-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - backend-network
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  ollama-data:
+  # caddy-data:
+  # caddy-config:
+
+networks:
+  frontend-network:
+    driver: bridge
+  backend-network:
+    driver: bridge

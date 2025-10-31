@@ -1,0 +1,68 @@
+# VividPages Caddyfile
+# Caddy automatically handles HTTPS with Let's Encrypt
+
+{
+    # Global options
+    admin off
+    # For development with localhost, disable auto HTTPS
+    # For production with domain, remove this line
+    auto_https off
+}
+
+# Development configuration (localhost)
+:80 {
+    # Frontend - everything not matching other routes
+    handle /* {
+        reverse_proxy frontend:3000
+    }
+
+    # API endpoints
+    handle /api/* {
+        reverse_proxy api:4000
+    }
+
+    # WebSocket connections
+    handle /socket.io/* {
+        reverse_proxy api:4000 {
+            header_up Upgrade {http.request.header.Upgrade}
+            header_up Connection {http.request.header.Connection}
+        }
+    }
+
+    # MinIO storage (optional - for debugging)
+    # handle /storage/* {
+    #     reverse_proxy minio:9000
+    # }
+}
+
+# Production configuration (uncomment and configure for your domain)
+# {$DOMAIN:localhost} {
+#     # Enable automatic HTTPS
+#     # Caddy will get certificate from Let's Encrypt automatically
+#
+#     # Frontend
+#     reverse_proxy /* frontend:80
+#
+#     # API
+#     reverse_proxy /api/* api:4000
+#
+#     # WebSocket
+#     reverse_proxy /socket.io/* api:4000 {
+#         header_up Upgrade {http.request.header.Upgrade}
+#         header_up Connection {http.request.header.Connection}
+#     }
+#
+#     # Security headers
+#     header {
+#         # Enable HSTS
+#         Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+#         # Prevent clickjacking
+#         X-Frame-Options "SAMEORIGIN"
+#         # Prevent MIME sniffing
+#         X-Content-Type-Options "nosniff"
+#         # Enable XSS protection
+#         X-XSS-Protection "1; mode=block"
+#         # Referrer policy
+#         Referrer-Policy "strict-origin-when-cross-origin"
+#     }
+# }
