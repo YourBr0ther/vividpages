@@ -9,7 +9,7 @@ RUN corepack enable pnpm
 # Stage 2: Dependencies
 FROM base AS deps
 COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile
+RUN if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else pnpm install; fi
 
 # Stage 3: Development
 FROM base AS development
