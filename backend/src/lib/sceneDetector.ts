@@ -42,6 +42,7 @@ export function detectScenes(chapters: Chapter[]): Scene[] {
 
 /**
  * Detect scenes within a single chapter
+ * New approach: Each paragraph or speaker's dialogue = one scene
  */
 function detectScenesInChapter(chapter: Chapter, startingGlobalIndex: number): Scene[] {
   const scenes: Scene[] = [];
@@ -52,64 +53,71 @@ function detectScenesInChapter(chapter: Chapter, startingGlobalIndex: number): S
     .map(p => p.trim())
     .filter(p => p.length > 0);
 
-  let currentScene: string[] = [];
   let sceneNumber = 1;
+  let i = 0;
 
-  for (let i = 0; i < paragraphs.length; i++) {
+  while (i < paragraphs.length) {
     const para = paragraphs[i];
 
-    // Check if this paragraph is a scene break
+    // Skip scene break markers
     if (isSceneBreak(para)) {
-      // Save current scene if it has content
-      if (currentScene.length > 0) {
-        scenes.push(createScene(
-          chapter,
-          sceneNumber,
-          startingGlobalIndex + sceneNumber - 1,
-          currentScene
-        ));
-        sceneNumber++;
-        currentScene = [];
-      }
-      // Don't include the scene break marker itself
+      i++;
       continue;
     }
 
-    // Add paragraph to current scene
-    currentScene.push(para);
+    // Check if this is dialogue
+    const isDialoguePara = detectDialogue(para);
 
-    // Check if we should create a scene break here
-    // (long scenes, POV changes, time jumps, etc.)
-    if (shouldBreakScene(currentScene, para, paragraphs[i + 1])) {
+    if (isDialoguePara) {
+      // Group consecutive dialogue from the same speaker
+      const dialogueGroup: string[] = [para];
+      const speaker = extractSpeaker(para);
+      i++;
+
+      // Continue adding paragraphs while they're dialogue from the same speaker
+      while (i < paragraphs.length) {
+        const nextPara = paragraphs[i];
+
+        if (isSceneBreak(nextPara)) {
+          break;
+        }
+
+        const isNextDialogue = detectDialogue(nextPara);
+        if (!isNextDialogue) {
+          // Hit narrative, stop grouping
+          break;
+        }
+
+        const nextSpeaker = extractSpeaker(nextPara);
+        if (speaker && nextSpeaker && speaker !== nextSpeaker) {
+          // Different speaker, stop grouping
+          break;
+        }
+
+        dialogueGroup.push(nextPara);
+        i++;
+      }
+
+      // Create scene from dialogue group
       scenes.push(createScene(
         chapter,
         sceneNumber,
         startingGlobalIndex + sceneNumber - 1,
-        currentScene
+        dialogueGroup
       ));
       sceneNumber++;
-      currentScene = [];
+
+    } else {
+      // Narrative paragraph - each paragraph is its own scene
+      scenes.push(createScene(
+        chapter,
+        sceneNumber,
+        startingGlobalIndex + sceneNumber - 1,
+        [para]
+      ));
+      sceneNumber++;
+      i++;
     }
-  }
-
-  // Add remaining content as final scene
-  if (currentScene.length > 0) {
-    scenes.push(createScene(
-      chapter,
-      sceneNumber,
-      startingGlobalIndex + sceneNumber - 1,
-      currentScene
-    ));
-  }
-
-  // If no scenes were created, treat entire chapter as one scene
-  if (scenes.length === 0 && chapter.content.trim().length > 0) {
-    scenes.push(createScene(
-      chapter,
-      1,
-      startingGlobalIndex,
-      [chapter.content]
-    ));
   }
 
   return scenes;
@@ -339,6 +347,31 @@ function estimateCharacterCount(text: string): number {
   }
 
   return Math.min(likelyNames.length, 10);
+}
+
+/**
+ * Extract speaker name from dialogue paragraph
+ * Looks for common dialogue tag patterns like "said John" or "Mary replied"
+ */
+function extractSpeaker(text: string): string | null {
+  // Common dialogue tag patterns
+  // Pattern 1: "said John", "asked Mary" (tag before name)
+  const patternTagFirst = /(?:said|asked|replied|answered|shouted|whispered|muttered|exclaimed|responded|called|cried|yelled|screamed|stammered|interrupted|continued|added|agreed|argued|begged|commanded|demanded|explained|inquired|insisted|protested|remarked|stated|suggested|warned)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i;
+
+  // Pattern 2: "John said", "Mary asked" (name before tag)
+  const patternNameFirst = /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:said|asked|replied|answered|shouted|whispered|muttered|exclaimed|responded|called|cried|yelled|screamed|stammered|interrupted|continued|added|agreed|argued|begged|commanded|demanded|explained|inquired|insisted|protested|remarked|stated|suggested|warned)/i;
+
+  // Try both patterns
+  const patterns = [patternNameFirst, patternTagFirst];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return match[1].trim(); // Return captured name
+    }
+  }
+
+  return null; // No clear speaker found
 }
 
 /**
