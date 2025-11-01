@@ -171,6 +171,13 @@ export const scenes = pgTable('scenes', {
 
   // LLM Analysis (populated in Phase 3)
   llmAnalysis: jsonb('llm_analysis'),
+  // Structure: { characters: [{name, description}], setting, timeOfDay, weather, mood, visualElements: [], keyActions: [] }
+
+  analysisStatus: varchar('analysis_status', { length: 50 }).default('pending'),
+  // Status: pending, processing, completed, failed
+  analyzedAt: timestamp('analyzed_at'),
+  analysisError: text('analysis_error'),
+
   imagePrompt: text('image_prompt'),
 
   // Storyboard (populated in Phase 4)

@@ -28,10 +28,10 @@ export const epubQueue = new Queue('epub-processing', {
 });
 
 /**
- * LLM Analysis Queue
- * Handles character extraction and scene analysis with LLMs
+ * Scene Analysis Queue
+ * Handles LLM analysis of individual scenes
  */
-export const llmQueue = new Queue('llm-analysis', {
+export const sceneAnalysisQueue = new Queue('scene-analysis', {
   connection,
   defaultJobOptions: {
     attempts: 2, // Fewer retries for LLM calls (expensive)
@@ -48,6 +48,12 @@ export const llmQueue = new Queue('llm-analysis', {
     },
   },
 });
+
+/**
+ * LLM Analysis Queue (legacy - keeping for compatibility)
+ * Handles character extraction and scene analysis with LLMs
+ */
+export const llmQueue = sceneAnalysisQueue;
 
 /**
  * Image Generation Queue
@@ -148,24 +154,30 @@ export async function queueEpubParsing(vividPageId: string, userId: string) {
 }
 
 /**
- * Add LLM analysis job to queue
+ * Add scene analysis job to queue
  */
-export async function queueLlmAnalysis(vividPageId: string, userId: string, settings: any) {
-  const job = await llmQueue.add(
+export async function queueSceneAnalysis(vividPageId: string, userId: string) {
+  const job = await sceneAnalysisQueue.add(
     'analyze-scenes',
     {
       vividPageId,
       userId,
-      settings,
       timestamp: Date.now(),
     },
     {
-      jobId: `llm-${vividPageId}`,
+      jobId: `analysis-${vividPageId}`,
     }
   );
 
-  console.log(`📤 Queued LLM analysis job: ${job.id}`);
+  console.log(`📤 Queued scene analysis job: ${job.id}`);
   return job;
+}
+
+/**
+ * Add LLM analysis job to queue (legacy - use queueSceneAnalysis instead)
+ */
+export async function queueLlmAnalysis(vividPageId: string, userId: string, settings?: any) {
+  return queueSceneAnalysis(vividPageId, userId);
 }
 
 /**
@@ -198,6 +210,9 @@ export async function getJobStatus(queueName: string, jobId: string) {
   switch (queueName) {
     case 'epub-processing':
       queue = epubQueue;
+      break;
+    case 'scene-analysis':
+      queue = sceneAnalysisQueue;
       break;
     case 'llm-analysis':
       queue = llmQueue;
@@ -239,8 +254,8 @@ export async function cleanupOldJobs() {
   await epubQueue.clean(24 * 3600 * 1000, 100, 'completed'); // 24 hours
   await epubQueue.clean(7 * 24 * 3600 * 1000, 0, 'failed'); // 7 days
 
-  await llmQueue.clean(24 * 3600 * 1000, 50, 'completed');
-  await llmQueue.clean(7 * 24 * 3600 * 1000, 0, 'failed');
+  await sceneAnalysisQueue.clean(24 * 3600 * 1000, 50, 'completed');
+  await sceneAnalysisQueue.clean(7 * 24 * 3600 * 1000, 0, 'failed');
 
   await imageQueue.clean(24 * 3600 * 1000, 50, 'completed');
   await imageQueue.clean(7 * 24 * 3600 * 1000, 0, 'failed');
@@ -256,7 +271,7 @@ export async function closeQueues() {
   console.log('🔌 Closing job queues...');
 
   await epubQueue.close();
-  await llmQueue.close();
+  await sceneAnalysisQueue.close();
   await imageQueue.close();
   await connection.quit();
 

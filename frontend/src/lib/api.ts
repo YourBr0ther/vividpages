@@ -174,6 +174,22 @@ export interface Scene {
   sceneType: string;
   hasDialogue: boolean;
   characterCount: number;
+  llmAnalysis: {
+    characters: Array<{
+      name: string;
+      description: string;
+    }>;
+    setting: string;
+    timeOfDay: string | null;
+    weather: string | null;
+    mood: string;
+    visualElements: string[];
+    keyActions: string[];
+  } | null;
+  analysisStatus: 'pending' | 'processing' | 'completed' | 'failed';
+  analyzedAt: string | null;
+  analysisError: string | null;
+  imagePrompt: string | null;
   createdAt: string;
 }
 
@@ -267,6 +283,30 @@ export const deleteVividPage = async (id: string): Promise<{
   message: string;
 }> => {
   const response = await api.delete(`/api/vividpages/${id}`);
+  return response.data;
+};
+
+/**
+ * Trigger scene analysis for a VividPage
+ */
+export const triggerSceneAnalysis = async (id: string): Promise<{
+  success: boolean;
+  message: string;
+  vividPage: {
+    id: string;
+    status: string;
+    progressPercent: number;
+  };
+}> => {
+  const response = await api.post(`/api/vividpages/${id}/analyze`);
+  return response.data;
+};
+
+/**
+ * Get a single scene with analysis data
+ */
+export const getScene = async (vividPageId: string, sceneId: string): Promise<Scene> => {
+  const response = await api.get<Scene>(`/api/vividpages/${vividPageId}/scenes/${sceneId}`);
   return response.data;
 };
 

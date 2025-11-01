@@ -100,6 +100,97 @@ function extractMetadata(filePath: string): Promise<{ metadata: EpubMetadata; ep
 }
 
 /**
+ * Check if a chapter should be filtered out (front/back matter)
+ */
+function shouldFilterChapter(title: string, content: string, wordCount: number): boolean {
+  const lowerTitle = title.toLowerCase();
+  const lowerContent = content.toLowerCase();
+
+  // Filter by title - common front/back matter keywords
+  const filterTitles = [
+    'table of contents',
+    'contents',
+    'toc',
+    'copyright',
+    'title page',
+    'half title',
+    'also by',
+    'books by',
+    'dedication',
+    'acknowledgment',
+    'acknowledgement',
+    'about the author',
+    'about the publisher',
+    'about this book',
+    'cover',
+    'frontmatter',
+    'front matter',
+    'backmatter',
+    'back matter',
+    'praise for',
+    'copyright page',
+    'epigraph',
+    'foreword',
+    'preface',
+    'introduction to',
+    'reader\'s guide',
+    'discussion questions',
+    'credits',
+    'permissions',
+    'colophon',
+    'index',
+    'glossary',
+    'notes',
+    'endnotes',
+    'bibliography',
+    'about the edition',
+    'newsletter',
+    'subscribe',
+  ];
+
+  for (const filterTitle of filterTitles) {
+    if (lowerTitle.includes(filterTitle)) {
+      console.log(`📋 Filtering out front/back matter: "${title}"`);
+      return true;
+    }
+  }
+
+  // Filter by content patterns
+
+  // Skip if too short (less than 200 words is likely not story content)
+  if (wordCount < 200) {
+    console.log(`📋 Filtering out short chapter: "${title}" (${wordCount} words)`);
+    return true;
+  }
+
+  // Check for copyright indicators in content
+  const copyrightIndicators = [
+    'all rights reserved',
+    'copyright ©',
+    '© copyright',
+    'published by',
+    'isbn',
+    'library of congress',
+  ];
+
+  for (const indicator of copyrightIndicators) {
+    if (lowerContent.includes(indicator) && wordCount < 500) {
+      console.log(`📋 Filtering out copyright/metadata chapter: "${title}"`);
+      return true;
+    }
+  }
+
+  // Check for TOC indicators - lots of "Chapter" references
+  const chapterMentions = (content.match(/chapter \d+/gi) || []).length;
+  if (chapterMentions > 5 && wordCount < 1000) {
+    console.log(`📋 Filtering out likely TOC: "${title}" (${chapterMentions} chapter references)`);
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Extract all chapters from EPUB
  */
 async function extractChapters(epub: any): Promise<Chapter[]> {
@@ -125,10 +216,10 @@ async function extractChapters(epub: any): Promise<Chapter[]> {
 
       // Convert HTML to plain text
       const plainText = htmlToPlainText(htmlContent);
+      const wordCount = countWords(plainText);
 
-      // Skip if chapter is too short (likely navigation/copyright pages)
-      if (plainText.trim().length < 100) {
-        console.log(`Skipping short chapter: ${title} (${plainText.length} chars)`);
+      // Filter out front/back matter
+      if (shouldFilterChapter(title, plainText, wordCount)) {
         continue;
       }
 
@@ -138,7 +229,7 @@ async function extractChapters(epub: any): Promise<Chapter[]> {
         number: chapters.length + 1, // Use actual chapter number after filtering
         content: plainText,
         htmlContent,
-        wordCount: countWords(plainText),
+        wordCount,
       });
 
     } catch (error) {

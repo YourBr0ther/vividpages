@@ -13,6 +13,7 @@ import Register from './pages/Register';
 import AuthCallback from './pages/AuthCallback';
 import Bookcase from './pages/Bookcase';
 import Settings from './pages/Settings';
+import VividPageViewer from './pages/VividPageViewer';
 
 // Create a client
 const queryClient = new QueryClient({
@@ -78,6 +79,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <Bookcase />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/vividpages/:id"
+            element={
+              <ProtectedRoute>
+                <VividPageViewer />
               </ProtectedRoute>
             }
           />

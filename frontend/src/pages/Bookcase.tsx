@@ -1,19 +1,22 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../lib/authStore';
-import { getVividPages, retryVividPage, VividPage } from '../lib/api';
+import { getVividPages, retryVividPage, deleteVividPage, VividPage } from '../lib/api';
 import { EpubUploader } from '../components/EpubUploader';
 
 export default function Bookcase() {
   const { user } = useAuthStore();
+  const navigate = useNavigate();
   const [showUploader, setShowUploader] = useState(false);
 
   // Fetch VividPages
   const { data: vividPages = [], refetch, isLoading } = useQuery({
     queryKey: ['vividPages'],
     queryFn: getVividPages,
-    refetchInterval: 5000, // Refetch every 5 seconds to update progress
+    refetchInterval: 1000, // Refetch every second for real-time progress updates
+    staleTime: 0, // Always consider data stale to ensure fresh progress updates
   });
 
   const handleUploadComplete = () => {
@@ -28,6 +31,21 @@ export default function Bookcase() {
       refetch();
     } catch (error: any) {
       const errorMessage = error.response?.data?.message || error.message || 'Retry failed';
+      toast.error(errorMessage);
+    }
+  };
+
+  const handleDelete = async (vividPageId: string, title: string) => {
+    if (!confirm(`Are you sure you want to delete "${title}"? This cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      await deleteVividPage(vividPageId);
+      toast.success('VividPage deleted');
+      refetch();
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.message || error.message || 'Delete failed';
       toast.error(errorMessage);
     }
   };
@@ -221,6 +239,20 @@ export default function Bookcase() {
                   <div className={`absolute top-3 right-3 px-3 py-1 rounded-full text-xs font-medium border ${getStatusColor(vividPage.status)}`}>
                     {getStatusLabel(vividPage.status)}
                   </div>
+
+                  {/* Delete Button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDelete(vividPage.id, vividPage.title);
+                    }}
+                    className="absolute top-3 left-3 p-2 bg-red-600 text-white rounded-full hover:bg-red-700 transition opacity-80 hover:opacity-100"
+                    title="Delete VividPage"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
                 </div>
 
                 {/* Content */}
@@ -286,10 +318,10 @@ export default function Bookcase() {
                       </button>
                     )}
 
-                    {vividPage.status === 'scenes_detected' && (
+                    {(vividPage.status === 'scenes_detected' || vividPage.status === 'analyzing' || vividPage.status === 'analyzed') && (
                       <button
-                        disabled
-                        className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={() => navigate(`/vividpages/${vividPage.id}`)}
+                        className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition"
                       >
                         View Scenes
                       </button>

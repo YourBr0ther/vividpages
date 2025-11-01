@@ -7,17 +7,8 @@ interface EpubUploaderProps {
   onUploadComplete: () => void;
 }
 
-interface UploadingFile {
-  id: string;
-  filename: string;
-  progress: number;
-  status: string;
-  currentStep: string | null;
-}
-
 export function EpubUploader({ onUploadComplete }: EpubUploaderProps) {
   const [uploading, setUploading] = useState(false);
-  const [uploadingFiles, setUploadingFiles] = useState<Map<string, UploadingFile>>(new Map());
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const file = acceptedFiles[0];
@@ -42,20 +33,11 @@ export function EpubUploader({ onUploadComplete }: EpubUploaderProps) {
       // Upload the file
       const response = await uploadEpub(file);
 
-      // Add to uploading files
-      setUploadingFiles((prev) => {
-        const newMap = new Map(prev);
-        newMap.set(response.vividPage.id, {
-          id: response.vividPage.id,
-          filename: response.vividPage.filename,
-          progress: response.vividPage.progressPercent,
-          status: response.vividPage.status,
-          currentStep: null,
-        });
-        return newMap;
-      });
-
       toast.success('Upload started! Processing your EPUB...');
+
+      // Close upload modal and return to bookcase to see processing
+      setUploading(false);
+      onUploadComplete();
 
     } catch (error: any) {
       setUploading(false);
@@ -124,40 +106,6 @@ export function EpubUploader({ onUploadComplete }: EpubUploaderProps) {
           </>
         )}
       </div>
-
-      {/* Uploading Files Progress */}
-      {uploadingFiles.size > 0 && (
-        <div className="space-y-3">
-          {Array.from(uploadingFiles.values()).map((file) => (
-            <div
-              key={file.id}
-              className="bg-white rounded-lg border border-gray-200 p-4"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-medium text-gray-800 truncate">
-                  {file.filename}
-                </span>
-                <span className="text-sm text-gray-600">
-                  {file.progress}%
-                </span>
-              </div>
-
-              {/* Progress bar */}
-              <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
-                <div
-                  className="bg-indigo-600 h-2 rounded-full transition-all duration-300"
-                  style={{ width: `${file.progress}%` }}
-                />
-              </div>
-
-              {/* Current step */}
-              {file.currentStep && (
-                <p className="text-xs text-gray-500">{file.currentStep}</p>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

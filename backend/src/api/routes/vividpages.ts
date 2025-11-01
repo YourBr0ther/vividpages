@@ -289,6 +289,15 @@ router.post('/:id/retry', authMiddleware, async (req: Request, res: Response) =>
 
     console.log(`🔄 Retrying VividPage: ${id}`);
 
+    // Remove old job if it exists
+    const { epubQueue } = await import('../../queue/queues.js');
+    const oldJobId = `epub-${id}`;
+    const oldJob = await epubQueue.getJob(oldJobId);
+    if (oldJob) {
+      console.log(`🗑️  Removing old job: ${oldJobId}`);
+      await oldJob.remove();
+    }
+
     // Reset status and progress
     await db.update(vividPages)
       .set({
@@ -359,6 +368,127 @@ router.get('/:id/cover', async (req: Request, res: Response) => {
     console.error('❌ Error fetching cover image:', error);
     res.status(500).json({
       error: 'Failed to fetch cover image',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * Trigger scene analysis for a VividPage
+ * POST /api/vividpages/:id/analyze
+ */
+router.post('/:id/analyze', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const { id } = req.params;
+
+    // Verify ownership
+    const vividPage = await db.query.vividPages.findFirst({
+      where: and(
+        eq(vividPages.id, id),
+        eq(vividPages.userId, user.id)
+      ),
+    });
+
+    if (!vividPage) {
+      return res.status(404).json({ error: 'VividPage not found' });
+    }
+
+    // Check if scenes have been detected
+    if (vividPage.status !== 'scenes_detected' && vividPage.status !== 'analyzed') {
+      return res.status(400).json({
+        error: 'Cannot analyze',
+        message: `VividPage status is "${vividPage.status}". Scenes must be detected before analysis.`,
+      });
+    }
+
+    // Check if there are any scenes
+    const sceneCount = await db.query.scenes.findMany({
+      where: eq(scenes.vividPageId, id),
+    });
+
+    if (sceneCount.length === 0) {
+      return res.status(400).json({
+        error: 'No scenes found',
+        message: 'This VividPage has no scenes to analyze.',
+      });
+    }
+
+    console.log(`🤖 Triggering analysis for VividPage: ${id}`);
+
+    // Update status to analyzing
+    await db.update(vividPages)
+      .set({
+        status: 'analyzing',
+        progressPercent: 10,
+        currentStep: 'Queueing scene analysis...',
+        updatedAt: new Date(),
+      })
+      .where(eq(vividPages.id, id));
+
+    // Queue the analysis job
+    const { queueSceneAnalysis } = await import('../../queue/queues.js');
+    const job = await queueSceneAnalysis(id, user.id);
+
+    console.log(`✅ Queued scene analysis job ${job.id} for VividPage ${id}`);
+
+    res.json({
+      success: true,
+      message: 'Scene analysis started',
+      vividPage: {
+        id,
+        status: 'analyzing',
+        progressPercent: 10,
+      },
+    });
+
+  } catch (error) {
+    console.error('❌ Error triggering scene analysis:', error);
+    res.status(500).json({
+      error: 'Failed to start scene analysis',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * Get a single scene with analysis data
+ * GET /api/vividpages/:id/scenes/:sceneId
+ */
+router.get('/:id/scenes/:sceneId', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const { id, sceneId } = req.params;
+
+    // Verify ownership of VividPage
+    const vividPage = await db.query.vividPages.findFirst({
+      where: and(
+        eq(vividPages.id, id),
+        eq(vividPages.userId, user.id)
+      ),
+    });
+
+    if (!vividPage) {
+      return res.status(404).json({ error: 'VividPage not found' });
+    }
+
+    // Get the scene
+    const scene = await db.query.scenes.findFirst({
+      where: and(
+        eq(scenes.id, sceneId),
+        eq(scenes.vividPageId, id)
+      ),
+    });
+
+    if (!scene) {
+      return res.status(404).json({ error: 'Scene not found' });
+    }
+
+    res.json(scene);
+  } catch (error) {
+    console.error('❌ Error fetching scene:', error);
+    res.status(500).json({
+      error: 'Failed to fetch scene',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }
