@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import * as dotenv from 'dotenv';
 import { pool } from '../db/index.js';
 import authRoutes from './routes/auth.js';
+import vividpagesRoutes from './routes/vividpages.js';
 import { apiLimiter } from './middleware/rateLimiter.js';
 import passport from '../lib/passport.js';
 
@@ -54,6 +55,9 @@ app.use('/api', apiLimiter);
 
 // Auth routes
 app.use('/api/auth', authRoutes);
+
+// VividPages routes
+app.use('/api/vividpages', vividpagesRoutes);
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {

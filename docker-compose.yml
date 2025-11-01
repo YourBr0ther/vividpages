@@ -128,6 +128,40 @@ services:
     networks:
       - frontend-network
 
+  # EPUB Worker
+  epub-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: ${BUILD_TARGET:-development}
+    container_name: vividpages-epub-worker
+    restart: unless-stopped
+    command: pnpm worker:epub
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-vividpages}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-vividpages}
+      REDIS_URL: redis://redis:6379
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_BUCKET: ${MINIO_BUCKET:-vividpages}
+      EPUB_WORKERS: ${EPUB_WORKERS:-2}
+    volumes:
+      - ./backend/src:/app/src
+      - /app/node_modules
+    networks:
+      - backend-network
+
   # Caddy Reverse Proxy (optional, for production)
   # caddy:
   #   image: caddy:2-alpine
