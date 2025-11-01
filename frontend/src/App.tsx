@@ -1,121 +1,109 @@
-import { useState, useEffect } from 'react';
-import axios from 'axios';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { Toaster } from 'react-hot-toast';
+import { useAuthStore } from './lib/authStore';
 
-interface HealthStatus {
-  status: string;
-  timestamp: string;
-  database: string;
-  version: string;
-}
+// Components
+import Navigation from './components/Navigation';
+import ProtectedRoute from './components/ProtectedRoute';
+
+// Pages
+import Login from './pages/Login';
+import Register from './pages/Register';
+import AuthCallback from './pages/AuthCallback';
+import Bookcase from './pages/Bookcase';
+import Settings from './pages/Settings';
 
 function App() {
-  const [health, setHealth] = useState<HealthStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const checkHealth = async () => {
-      try {
-        const response = await axios.get<HealthStatus>('/api/health');
-        setHealth(response.data);
-        setError(null);
-      } catch (err) {
-        setError('Failed to connect to API');
-        console.error('Health check failed:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    checkHealth();
-  }, []);
+  const { isAuthenticated } = useAuthStore();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50">
-      <div className="container mx-auto px-4 py-16">
-        {/* Header */}
-        <div className="text-center mb-16">
-          <h1 className="text-6xl font-bold text-gray-900 mb-4">
-            Vivid<span className="text-primary-600">Pages</span>
-          </h1>
-          <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-            Transform your favorite books into immersive visual experiences with AI-generated storyboards
-          </p>
-        </div>
+    <BrowserRouter>
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          duration: 4000,
+          style: {
+            background: '#363636',
+            color: '#fff',
+          },
+          success: {
+            duration: 3000,
+            iconTheme: {
+              primary: '#10b981',
+              secondary: '#fff',
+            },
+          },
+          error: {
+            duration: 5000,
+            iconTheme: {
+              primary: '#ef4444',
+              secondary: '#fff',
+            },
+          },
+        }}
+      />
 
-        {/* Status Card */}
-        <div className="max-w-2xl mx-auto">
-          <div className="bg-white rounded-2xl shadow-xl p-8 border border-gray-200">
-            <h2 className="text-2xl font-semibold text-gray-800 mb-6">System Status</h2>
+      <div className="min-h-screen">
+        {/* Show navigation only when authenticated */}
+        {isAuthenticated && <Navigation />}
 
-            {loading && (
-              <div className="flex items-center justify-center py-8">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+        <Routes>
+          {/* Public Routes */}
+          <Route
+            path="/login"
+            element={isAuthenticated ? <Navigate to="/bookcase" replace /> : <Login />}
+          />
+          <Route
+            path="/register"
+            element={isAuthenticated ? <Navigate to="/bookcase" replace /> : <Register />}
+          />
+          <Route path="/auth/callback" element={<AuthCallback />} />
+
+          {/* Protected Routes */}
+          <Route
+            path="/bookcase"
+            element={
+              <ProtectedRoute>
+                <Bookcase />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/settings"
+            element={
+              <ProtectedRoute>
+                <Settings />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Default Route */}
+          <Route
+            path="/"
+            element={<Navigate to={isAuthenticated ? '/bookcase' : '/login'} replace />}
+          />
+
+          {/* 404 Route */}
+          <Route
+            path="*"
+            element={
+              <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50 flex items-center justify-center">
+                <div className="text-center">
+                  <h1 className="text-6xl font-bold text-gray-900 mb-4">404</h1>
+                  <p className="text-xl text-gray-600 mb-8">Page not found</p>
+                  <a
+                    href={isAuthenticated ? '/bookcase' : '/login'}
+                    className="inline-block bg-indigo-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-indigo-700 transition"
+                  >
+                    Go Home
+                  </a>
+                </div>
               </div>
-            )}
-
-            {error && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                <p className="text-red-800 font-medium">❌ {error}</p>
-              </div>
-            )}
-
-            {health && !loading && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between p-4 bg-green-50 rounded-lg border border-green-200">
-                  <span className="text-green-800 font-medium">API Status</span>
-                  <span className="text-green-600 text-2xl">✅</span>
-                </div>
-
-                <div className="flex items-center justify-between p-4 bg-blue-50 rounded-lg border border-blue-200">
-                  <span className="text-blue-800 font-medium">Database</span>
-                  <span className="text-blue-600 capitalize">{health.database}</span>
-                </div>
-
-                <div className="flex items-center justify-between p-4 bg-purple-50 rounded-lg border border-purple-200">
-                  <span className="text-purple-800 font-medium">Version</span>
-                  <span className="text-purple-600">{health.version}</span>
-                </div>
-
-                <div className="text-sm text-gray-500 text-center mt-4">
-                  Last checked: {new Date(health.timestamp).toLocaleString()}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Info Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
-            <div className="bg-white rounded-xl shadow-lg p-6 text-center border border-gray-200">
-              <div className="text-4xl mb-3">📚</div>
-              <h3 className="font-semibold text-gray-800">EPUB Processing</h3>
-              <p className="text-sm text-gray-600 mt-2">Parse and analyze book content</p>
-            </div>
-
-            <div className="bg-white rounded-xl shadow-lg p-6 text-center border border-gray-200">
-              <div className="text-4xl mb-3">🤖</div>
-              <h3 className="font-semibold text-gray-800">AI Analysis</h3>
-              <p className="text-sm text-gray-600 mt-2">Character & scene detection</p>
-            </div>
-
-            <div className="bg-white rounded-xl shadow-lg p-6 text-center border border-gray-200">
-              <div className="text-4xl mb-3">🎨</div>
-              <h3 className="font-semibold text-gray-800">Image Generation</h3>
-              <p className="text-sm text-gray-600 mt-2">Create stunning storyboards</p>
-            </div>
-          </div>
-
-          {/* Phase Info */}
-          <div className="mt-8 text-center">
-            <div className="inline-block bg-yellow-50 border border-yellow-200 rounded-lg px-6 py-3">
-              <p className="text-yellow-800 font-medium">
-                🚧 Phase 0: Foundation & Setup - In Progress
-              </p>
-            </div>
-          </div>
-        </div>
+            }
+          />
+        </Routes>
       </div>
-    </div>
+    </BrowserRouter>
   );
 }
 

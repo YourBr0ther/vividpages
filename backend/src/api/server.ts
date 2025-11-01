@@ -5,6 +5,7 @@ import * as dotenv from 'dotenv';
 import { pool } from '../db/index.js';
 import authRoutes from './routes/auth.js';
 import { apiLimiter } from './middleware/rateLimiter.js';
+import passport from '../lib/passport.js';
 
 // Load environment variables
 dotenv.config();
@@ -21,13 +22,22 @@ app.use(helmet());
 
 // CORS
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: [
+    process.env.FRONTEND_URL || 'http://localhost:3000',
+    'http://localhost:3000',
+    'http://vividpages.hiddencasa.com',
+    'https://vividpages.hiddencasa.com',
+    /^http:\/\/10\.0\.2\.\d+:3000$/, // Allow any IP in 10.0.2.x range
+  ],
   credentials: true,
 }));
 
 // Body parsing
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Passport initialization
+app.use(passport.initialize());
 
 // Request logging
 app.use((req, res, next) => {

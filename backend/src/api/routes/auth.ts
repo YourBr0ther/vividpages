@@ -11,6 +11,7 @@ import {
 } from '../../lib/auth.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
+import passport from '../../lib/passport.js';
 
 const router = express.Router();
 
@@ -236,5 +237,61 @@ router.post('/logout', authMiddleware, async (req: Request, res: Response) => {
     message: 'Logout successful',
   });
 });
+
+// ============================================
+// Google OAuth Routes
+// ============================================
+
+/**
+ * Initiate Google OAuth flow
+ * Redirects user to Google's consent screen
+ */
+router.get(
+  '/google',
+  authLimiter,
+  passport.authenticate('google', {
+    scope: ['profile', 'email'],
+    session: false,
+  })
+);
+
+/**
+ * Google OAuth callback handler
+ * Handles the redirect from Google after user authorization
+ */
+router.get(
+  '/google/callback',
+  authLimiter,
+  passport.authenticate('google', {
+    session: false,
+    failureRedirect: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login?error=oauth_failed`,
+  }),
+  async (req: Request, res: Response) => {
+    try {
+      // User is attached by passport
+      const user = req.user as any;
+
+      if (!user) {
+        return res.redirect(
+          `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login?error=no_user`
+        );
+      }
+
+      // Generate JWT token
+      const token = generateToken(user.id, user.email);
+
+      // Redirect to frontend with token
+      // Frontend will extract token from URL and store it
+      res.redirect(
+        `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/callback?token=${token}`
+      );
+    } catch (error) {
+      console.error('Google OAuth callback error:', error);
+      res.redirect(
+        `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login?error=server_error`
+      );
+    }
+  }
+);
 
 export default router;
