@@ -3,6 +3,8 @@ import cors from 'cors';
 import helmet from 'helmet';
 import * as dotenv from 'dotenv';
 import { pool } from '../db/index.js';
+import authRoutes from './routes/auth.js';
+import { apiLimiter } from './middleware/rateLimiter.js';
 
 // Load environment variables
 dotenv.config();
@@ -33,9 +35,15 @@ app.use((req, res, next) => {
   next();
 });
 
+// Rate limiting
+app.use('/api', apiLimiter);
+
 // ============================================
 // Routes
 // ============================================
+
+// Auth routes
+app.use('/api/auth', authRoutes);
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
