@@ -129,6 +129,148 @@ export const logout = async (): Promise<void> => {
 };
 
 // ============================================
+// VividPages API Functions
+// ============================================
+
+export interface VividPage {
+  id: string;
+  userId: string;
+  title: string;
+  author: string | null;
+  isbn: string | null;
+  language: string | null;
+  epubFilename: string;
+  epubPath: string;
+  epubSizeBytes: number;
+  epubHash: string | null;
+  coverImagePath: string | null;
+  stylePreset: string | null;
+  llmModel: string | null;
+  imageModel: string | null;
+  settings: Record<string, any>;
+  status: 'uploading' | 'parsing' | 'scenes_detected' | 'analyzing' | 'generating' | 'completed' | 'failed';
+  progressPercent: number;
+  currentStep: string | null;
+  errorMessage: string | null;
+  totalChapters: number | null;
+  totalScenes: number | null;
+  totalStoryboards: number | null;
+  totalCharacters: number | null;
+  wordCount: number | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+export interface Scene {
+  id: string;
+  vividPageId: string;
+  chapterNumber: number;
+  chapterTitle: string;
+  sceneNumber: number;
+  sceneIndexGlobal: number;
+  textContent: string;
+  wordCount: number;
+  sceneType: string;
+  hasDialogue: boolean;
+  characterCount: number;
+  createdAt: string;
+}
+
+export interface UploadResponse {
+  success: boolean;
+  vividPage: {
+    id: string;
+    title: string;
+    filename: string;
+    status: string;
+    progressPercent: number;
+  };
+}
+
+/**
+ * Upload an EPUB file
+ */
+export const uploadEpub = async (file: File): Promise<UploadResponse> => {
+  const formData = new FormData();
+  formData.append('epub', file);
+
+  const response = await api.post<UploadResponse>('/api/vividpages/upload', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+
+  return response.data;
+};
+
+/**
+ * Get all VividPages for the current user
+ */
+export const getVividPages = async (): Promise<VividPage[]> => {
+  const response = await api.get<VividPage[]>('/api/vividpages');
+  return response.data;
+};
+
+/**
+ * Get a single VividPage by ID
+ */
+export const getVividPage = async (id: string): Promise<VividPage> => {
+  const response = await api.get<VividPage>(`/api/vividpages/${id}`);
+  return response.data;
+};
+
+/**
+ * Get VividPage status (for polling)
+ */
+export const getVividPageStatus = async (id: string): Promise<{
+  status: string;
+  progressPercent: number;
+  currentStep: string | null;
+  errorMessage: string | null;
+  totalChapters: number | null;
+  totalScenes: number | null;
+}> => {
+  const response = await api.get(`/api/vividpages/${id}/status`);
+  return response.data;
+};
+
+/**
+ * Get scenes for a VividPage
+ */
+export const getVividPageScenes = async (id: string): Promise<Scene[]> => {
+  const response = await api.get<Scene[]>(`/api/vividpages/${id}/scenes`);
+  return response.data;
+};
+
+/**
+ * Retry processing a failed VividPage
+ */
+export const retryVividPage = async (id: string): Promise<{
+  success: boolean;
+  message: string;
+  vividPage: {
+    id: string;
+    status: string;
+    progressPercent: number;
+  };
+}> => {
+  const response = await api.post(`/api/vividpages/${id}/retry`);
+  return response.data;
+};
+
+/**
+ * Delete a VividPage
+ */
+export const deleteVividPage = async (id: string): Promise<{
+  success: boolean;
+  message: string;
+}> => {
+  const response = await api.delete(`/api/vividpages/${id}`);
+  return response.data;
+};
+
+// ============================================
 // Health Check
 // ============================================
 

@@ -3,6 +3,7 @@ import { authMiddleware } from '../middleware/auth.js';
 import { upload, cleanupTempFile } from '../../lib/upload.js';
 import { uploadFile, ensureBucket } from '../../lib/minio.js';
 import { queueEpubParsing } from '../../queue/queues.js';
+import { calculateFileHash } from '../../lib/fileHash.js';
 import { db } from '../../db/index.js';
 import { vividPages, scenes } from '../../db/schema.js';
 import { eq, and, desc } from 'drizzle-orm';
@@ -28,6 +29,36 @@ router.post('/upload', authMiddleware, upload.single('epub'), async (req: Reques
   try {
     console.log(`📤 Uploading EPUB: ${file.originalname} (${file.size} bytes)`);
 
+    // Calculate file hash for duplicate detection
+    console.log(`🔐 Calculating file hash...`);
+    const fileHash = await calculateFileHash(file.path);
+    console.log(`✅ File hash: ${fileHash}`);
+
+    // Check for duplicate
+    const existingVividPage = await db.query.vividPages.findFirst({
+      where: and(
+        eq(vividPages.userId, user.id),
+        eq(vividPages.epubHash, fileHash)
+      ),
+    });
+
+    if (existingVividPage) {
+      // Clean up temp file
+      cleanupTempFile(file.path);
+
+      return res.status(409).json({
+        error: 'Duplicate file',
+        message: 'You have already uploaded this EPUB',
+        existingVividPage: {
+          id: existingVividPage.id,
+          title: existingVividPage.title,
+          author: existingVividPage.author,
+          status: existingVividPage.status,
+          createdAt: existingVividPage.createdAt,
+        },
+      });
+    }
+
     // Generate unique path in MinIO
     const userId = user.id;
     const timestamp = Date.now();
@@ -47,6 +78,7 @@ router.post('/upload', authMiddleware, upload.single('epub'), async (req: Reques
       epubFilename: file.originalname,
       epubPath: minioPath,
       epubSizeBytes: file.size,
+      epubHash: fileHash,
       status: 'uploading',
       progressPercent: 10,
       currentStep: 'File uploaded, queuing for processing...',
@@ -227,8 +259,115 @@ router.get('/:id/scenes', authMiddleware, async (req: Request, res: Response) =>
 });
 
 /**
+ * Retry processing a failed VividPage
+ * POST /api/vividpages/:id/retry
+ */
+router.post('/:id/retry', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const { id } = req.params;
+
+    // Verify ownership
+    const vividPage = await db.query.vividPages.findFirst({
+      where: and(
+        eq(vividPages.id, id),
+        eq(vividPages.userId, user.id)
+      ),
+    });
+
+    if (!vividPage) {
+      return res.status(404).json({ error: 'VividPage not found' });
+    }
+
+    // Only allow retry for failed status
+    if (vividPage.status !== 'failed') {
+      return res.status(400).json({
+        error: 'Cannot retry',
+        message: `VividPage status is "${vividPage.status}". Only failed VividPages can be retried.`,
+      });
+    }
+
+    console.log(`🔄 Retrying VividPage: ${id}`);
+
+    // Reset status and progress
+    await db.update(vividPages)
+      .set({
+        status: 'parsing',
+        progressPercent: 15,
+        currentStep: 'Retrying processing...',
+        errorMessage: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(vividPages.id, id));
+
+    // Re-queue the job
+    const job = await queueEpubParsing(id, user.id);
+
+    console.log(`✅ Re-queued EPUB parsing job ${job.id} for VividPage ${id}`);
+
+    res.json({
+      success: true,
+      message: 'Processing restarted',
+      vividPage: {
+        id,
+        status: 'parsing',
+        progressPercent: 15,
+      },
+    });
+
+  } catch (error) {
+    console.error('❌ Error retrying VividPage:', error);
+    res.status(500).json({
+      error: 'Failed to retry processing',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * Get VividPage cover image
+ * GET /api/vividpages/:id/cover
+ * Public endpoint - no auth required (cover images are not sensitive)
+ */
+router.get('/:id/cover', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // Get VividPage (no ownership check - covers are public)
+    const vividPage = await db.query.vividPages.findFirst({
+      where: eq(vividPages.id, id),
+    });
+
+    if (!vividPage) {
+      return res.status(404).json({ error: 'VividPage not found' });
+    }
+
+    if (!vividPage.coverImagePath) {
+      return res.status(404).json({ error: 'Cover image not found' });
+    }
+
+    // Stream the cover image from MinIO
+    const { getFileStream } = await import('../../lib/minio.js');
+    const stream = await getFileStream(vividPage.coverImagePath);
+
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+    res.setHeader('Access-Control-Allow-Origin', '*'); // Allow cross-origin image loading
+
+    stream.pipe(res);
+  } catch (error) {
+    console.error('❌ Error fetching cover image:', error);
+    res.status(500).json({
+      error: 'Failed to fetch cover image',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
  * Delete a VividPage
  * DELETE /api/vividpages/:id
+ * Note: EPUB file is kept in MinIO as it may be needed for reading/voice features
  */
 router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
   try {
@@ -247,9 +386,7 @@ router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'VividPage not found' });
     }
 
-    // TODO: Delete EPUB from MinIO
-    // await deleteFile(vividPage.epubPath);
-
+    // Keep EPUB in MinIO (needed for reading and future voice features)
     // Delete from database (cascade will delete jobs and scenes)
     await db.delete(vividPages).where(eq(vividPages.id, id));
 

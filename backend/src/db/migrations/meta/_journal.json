@@ -15,6 +15,13 @@
       "when": 1762026852602,
       "tag": "0001_cultured_black_widow",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1762028747226,
+      "tag": "0002_next_shockwave",
+      "breakpoints": true
     }
   ]
 }

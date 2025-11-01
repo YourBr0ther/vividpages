@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'react-hot-toast';
 import { useAuthStore } from './lib/authStore';
 
@@ -13,11 +14,23 @@ import AuthCallback from './pages/AuthCallback';
 import Bookcase from './pages/Bookcase';
 import Settings from './pages/Settings';
 
+// Create a client
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      retry: 1,
+      staleTime: 30000, // 30 seconds
+    },
+  },
+});
+
 function App() {
   const { isAuthenticated } = useAuthStore();
 
   return (
-    <BrowserRouter>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
       <Toaster
         position="top-right"
         toastOptions={{
@@ -104,6 +117,7 @@ function App() {
         </Routes>
       </div>
     </BrowserRouter>
+    </QueryClientProvider>
   );
 }
 

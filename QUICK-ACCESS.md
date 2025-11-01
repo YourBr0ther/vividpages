@@ -14,7 +14,7 @@
 
 **Demo Account:**
 - Email: demo@vividpages.com
-- Password: Demo123!
+- Password: vividdemo123
 
 **Test Account:**
 - Email: test@vividpages.com

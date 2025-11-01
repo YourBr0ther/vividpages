@@ -6,6 +6,7 @@ import { eq } from 'drizzle-orm';
 import { downloadFile, uploadBuffer } from '../lib/minio.js';
 import { parseEpub, getTotalWordCount } from '../lib/epubParser.js';
 import { detectScenes } from '../lib/sceneDetector.js';
+import { emitProgress, emitStatusUpdate, emitErrorUpdate, emitCompletion } from '../lib/progressEmitter.js';
 import path from 'path';
 import fs from 'fs';
 
@@ -170,6 +171,18 @@ export const epubWorker = new Worker<EpubJobData>(
 
       console.log(`✅ Updated VividPage with final data`);
 
+      // Emit completion event
+      emitCompletion(vividPageId, {
+        chaptersProcessed: chapters.length,
+        scenesDetected: detectedScenes.length,
+        wordCount: getTotalWordCount(chapters),
+      });
+
+      emitStatusUpdate(vividPageId, 'scenes_detected', {
+        totalChapters: chapters.length,
+        totalScenes: detectedScenes.length,
+      });
+
       // ============================================
       // Step 8: Cleanup
       // ============================================
@@ -193,14 +206,20 @@ export const epubWorker = new Worker<EpubJobData>(
     } catch (error) {
       console.error(`\n❌ Error processing EPUB for VividPage ${vividPageId}:`, error);
 
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
       // Update VividPage with error status
       await db.update(vividPages)
         .set({
           status: 'failed',
-          errorMessage: error instanceof Error ? error.message : 'Unknown error',
+          errorMessage,
           updatedAt: new Date(),
         })
         .where(eq(vividPages.id, vividPageId));
+
+      // Emit error event
+      emitErrorUpdate(vividPageId, errorMessage);
+      emitStatusUpdate(vividPageId, 'failed', { errorMessage });
 
       throw error;
     }
@@ -220,6 +239,7 @@ async function updateVividPageProgress(
   progressPercent: number,
   currentStep: string
 ): Promise<void> {
+  // Update database
   await db.update(vividPages)
     .set({
       progressPercent,
@@ -227,6 +247,9 @@ async function updateVividPageProgress(
       updatedAt: new Date(),
     })
     .where(eq(vividPages.id, vividPageId));
+
+  // Emit real-time progress via Redis pub/sub -> Socket.IO
+  emitProgress(vividPageId, progressPercent, currentStep);
 }
 
 // ============================================

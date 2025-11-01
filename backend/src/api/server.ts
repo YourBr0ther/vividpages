@@ -2,11 +2,13 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import * as dotenv from 'dotenv';
+import { createServer } from 'http';
 import { pool } from '../db/index.js';
 import authRoutes from './routes/auth.js';
 import vividpagesRoutes from './routes/vividpages.js';
 import { apiLimiter } from './middleware/rateLimiter.js';
 import passport from '../lib/passport.js';
+import { initializeSocket } from '../lib/socket.js';
 
 // Load environment variables
 dotenv.config();
@@ -18,8 +20,21 @@ const PORT = process.env.API_PORT || 4000;
 // Middleware
 // ============================================
 
-// Security headers
-app.use(helmet());
+// Trust proxy (needed for rate limiting behind NGINX)
+app.set('trust proxy', true);
+
+// Security headers with relaxed CSP for images
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      imgSrc: ["'self'", 'data:', 'http:', 'https:'], // Allow images from anywhere
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+    },
+  },
+  crossOriginResourcePolicy: { policy: 'cross-origin' }, // Allow cross-origin resources
+}));
 
 // CORS
 app.use(cors({
@@ -117,13 +132,29 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
 // Server Startup
 // ============================================
 
-const server = app.listen(PORT, () => {
+// Create HTTP server
+const httpServer = createServer(app);
+
+// Initialize Socket.IO
+const corsOrigins = [
+  process.env.FRONTEND_URL || 'http://localhost:3000',
+  'http://localhost:3000',
+  'http://vividpages.hiddencasa.com',
+  'https://vividpages.hiddencasa.com',
+  /^http:\/\/10\.0\.2\.\d+:3000$/,
+];
+
+initializeSocket(httpServer, corsOrigins);
+
+// Start server
+const server = httpServer.listen(PORT, () => {
   console.log('');
   console.log('🚀 VividPages API Server Started');
   console.log('================================');
   console.log(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🔌 Port: ${PORT}`);
   console.log(`🏥 Health Check: http://localhost:${PORT}/api/health`);
+  console.log(`📡 WebSocket: Enabled`);
   console.log('================================');
   console.log('');
 });

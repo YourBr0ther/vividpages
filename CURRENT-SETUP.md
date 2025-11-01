@@ -100,7 +100,7 @@ cors({
 1. Open browser: **http://10.0.2.180:3000**
 2. You'll see the login page
 3. Login options:
-   - Email/password (demo@vividpages.com / Demo123!)
+   - Email/password (demo@vividpages.com / vividdemo123)
    - Google OAuth (click "Sign in with Google")
 
 ### From Your Phone (Same Network)

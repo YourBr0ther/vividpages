@@ -74,6 +74,7 @@ export const vividPages = pgTable('vivid_pages', {
   epubFilename: varchar('epub_filename', { length: 255 }).notNull(),
   epubPath: varchar('epub_path', { length: 1000 }).notNull(),
   epubSizeBytes: integer('epub_size_bytes'),
+  epubHash: varchar('epub_hash', { length: 64 }), // SHA-256 hash for duplicate detection
   coverImagePath: varchar('cover_image_path', { length: 1000 }),
 
   // Generation settings (optional until user configures)
@@ -105,6 +106,7 @@ export const vividPages = pgTable('vivid_pages', {
     userIdIdx: index('idx_vivid_pages_user_id').on(table.userId),
     statusIdx: index('idx_vivid_pages_status').on(table.status),
     createdAtIdx: index('idx_vivid_pages_created_at').on(table.createdAt),
+    hashIdx: index('idx_vivid_pages_hash').on(table.epubHash),
   };
 });
 
