@@ -1,5 +1,27 @@
-import { pgTable, uuid, varchar, timestamp, boolean, text, integer, jsonb, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, timestamp, boolean, text, integer, jsonb, index, customType } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
+
+// ============================================
+// Custom Types
+// ============================================
+
+// Custom vector type for pgvector extension
+const vector = (dimensions: number = 1536) =>
+  customType<{ data: number[]; driverData: string }>({
+    dataType() {
+      return `vector(${dimensions})`;
+    },
+    fromDriver(value: string): number[] {
+      // pgvector returns arrays as string like "[1,2,3]"
+      if (typeof value === 'string') {
+        return JSON.parse(value);
+      }
+      return value as unknown as number[];
+    },
+    toDriver(value: number[]): string {
+      return `[${value.join(',')}]`;
+    },
+  })();
 
 // ============================================
 // Users Table
@@ -193,6 +215,150 @@ export const scenes = pgTable('scenes', {
 });
 
 // ============================================
+// Characters Table
+// ============================================
+export const characters = pgTable('characters', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  vividPageId: uuid('vivid_page_id').references(() => vividPages.id, { onDelete: 'cascade' }).notNull(),
+
+  // Character identification
+  name: varchar('name', { length: 255 }).notNull(),
+  aliases: text('aliases').array(), // Alternative names (e.g., ["Jon", "Jon Snow", "Lord Snow"])
+
+  // Physical description (stored as JSON for flexibility)
+  initialAppearance: jsonb('initial_appearance').notNull(),
+  /* initialAppearance schema:
+  {
+    physicalDescription: string,
+    age: string,
+    height: string,
+    build: string,
+    hairColor: string,
+    hairStyle: string,
+    eyeColor: string,
+    skinTone: string,
+    distinctiveFeatures: string[],
+    typicalClothing: string
+  }
+  */
+
+  // Reference image for consistency (optional)
+  referenceImagePath: varchar('reference_image_path', { length: 1000 }),
+
+  // Character metadata
+  role: varchar('role', { length: 50 }), // 'protagonist', 'antagonist', 'supporting', 'minor'
+  firstAppearanceScene: uuid('first_appearance_scene').references(() => scenes.id),
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => {
+  return {
+    vividPageIdIdx: index('idx_characters_vivid_page_id').on(table.vividPageId),
+    nameIdx: index('idx_characters_name').on(table.name),
+  };
+});
+
+// ============================================
+// Settings Table (Locations/Environments)
+// ============================================
+export const settings = pgTable('settings', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  vividPageId: uuid('vivid_page_id').references(() => vividPages.id, { onDelete: 'cascade' }).notNull(),
+
+  // Location identification
+  name: varchar('name', { length: 255 }).notNull(), // e.g., "Dark Forest", "Castle Throne Room"
+  description: text('description').notNull(), // Detailed description of the setting
+
+  // Visual consistency keywords
+  visualKeywords: text('visual_keywords').array(), // e.g., ["ancient trees", "mist", "moonlight"]
+
+  // First appearance for reference
+  firstAppearanceScene: uuid('first_appearance_scene').references(() => scenes.id),
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => {
+  return {
+    vividPageIdIdx: index('idx_settings_vivid_page_id').on(table.vividPageId),
+    nameIdx: index('idx_settings_name').on(table.name),
+  };
+});
+
+// ============================================
+// Character Changes Table
+// ============================================
+export const characterChanges = pgTable('character_changes', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  characterId: uuid('character_id').references(() => characters.id, { onDelete: 'cascade' }).notNull(),
+  sceneId: uuid('scene_id').references(() => scenes.id, { onDelete: 'cascade' }).notNull(),
+
+  // Type of change
+  changeType: varchar('change_type', { length: 50 }).notNull(),
+  // Types: 'outfit', 'injury', 'hair', 'age', 'temporary', 'permanent'
+
+  // Description of the change
+  description: text('description').notNull(),
+  // e.g., "Lost left eye in battle", "Changed into royal armor"
+
+  // Prompt modifier to add to future image prompts
+  promptModifier: text('prompt_modifier'),
+  // e.g., "wearing a black eyepatch over left eye", "dressed in golden royal armor"
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => {
+  return {
+    characterIdIdx: index('idx_character_changes_character_id').on(table.characterId),
+    sceneIdIdx: index('idx_character_changes_scene_id').on(table.sceneId),
+  };
+});
+
+// ============================================
+// Character Embeddings Table (Vector)
+// ============================================
+export const characterEmbeddings = pgTable('character_embeddings', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  characterId: uuid('character_id').references(() => characters.id, { onDelete: 'cascade' }).notNull().unique(),
+
+  // Vector embedding (1536 dimensions for OpenAI text-embedding-ada-002)
+  embedding: vector('embedding', { dimensions: 1536 }).notNull(),
+
+  // Metadata for tracking
+  model: varchar('model', { length: 100 }).notNull(), // e.g., 'text-embedding-ada-002'
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => {
+  return {
+    characterIdIdx: index('idx_character_embeddings_character_id').on(table.characterId),
+    // Note: Vector similarity index will be created via raw SQL in migration
+    // CREATE INDEX idx_character_embeddings_vector ON character_embeddings USING hnsw (embedding vector_cosine_ops);
+  };
+});
+
+// ============================================
+// Setting Embeddings Table (Vector)
+// ============================================
+export const settingEmbeddings = pgTable('setting_embeddings', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  settingId: uuid('setting_id').references(() => settings.id, { onDelete: 'cascade' }).notNull().unique(),
+
+  // Vector embedding (1536 dimensions for OpenAI text-embedding-ada-002)
+  embedding: vector('embedding', { dimensions: 1536 }).notNull(),
+
+  // Metadata for tracking
+  model: varchar('model', { length: 100 }).notNull(), // e.g., 'text-embedding-ada-002'
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => {
+  return {
+    settingIdIdx: index('idx_setting_embeddings_setting_id').on(table.settingId),
+    // Note: Vector similarity index will be created via raw SQL in migration
+    // CREATE INDEX idx_setting_embeddings_vector ON setting_embeddings USING hnsw (embedding vector_cosine_ops);
+  };
+});
+
+// ============================================
 // Relations
 // ============================================
 export const usersRelations = relations(users, ({ many }) => ({
@@ -216,6 +382,8 @@ export const vividPagesRelations = relations(vividPages, ({ one, many }) => ({
   }),
   jobs: many(jobs),
   scenes: many(scenes),
+  characters: many(characters),
+  settings: many(settings),
 }));
 
 export const jobsRelations = relations(jobs, ({ one }) => ({
@@ -233,6 +401,56 @@ export const scenesRelations = relations(scenes, ({ one }) => ({
   vividPage: one(vividPages, {
     fields: [scenes.vividPageId],
     references: [vividPages.id],
+  }),
+}));
+
+export const charactersRelations = relations(characters, ({ one, many }) => ({
+  vividPage: one(vividPages, {
+    fields: [characters.vividPageId],
+    references: [vividPages.id],
+  }),
+  firstAppearance: one(scenes, {
+    fields: [characters.firstAppearanceScene],
+    references: [scenes.id],
+  }),
+  changes: many(characterChanges),
+  embedding: one(characterEmbeddings),
+}));
+
+export const settingsRelations = relations(settings, ({ one, many }) => ({
+  vividPage: one(vividPages, {
+    fields: [settings.vividPageId],
+    references: [vividPages.id],
+  }),
+  firstAppearance: one(scenes, {
+    fields: [settings.firstAppearanceScene],
+    references: [scenes.id],
+  }),
+  embedding: one(settingEmbeddings),
+}));
+
+export const characterChangesRelations = relations(characterChanges, ({ one }) => ({
+  character: one(characters, {
+    fields: [characterChanges.characterId],
+    references: [characters.id],
+  }),
+  scene: one(scenes, {
+    fields: [characterChanges.sceneId],
+    references: [scenes.id],
+  }),
+}));
+
+export const characterEmbeddingsRelations = relations(characterEmbeddings, ({ one }) => ({
+  character: one(characters, {
+    fields: [characterEmbeddings.characterId],
+    references: [characters.id],
+  }),
+}));
+
+export const settingEmbeddingsRelations = relations(settingEmbeddings, ({ one }) => ({
+  setting: one(settings, {
+    fields: [settingEmbeddings.settingId],
+    references: [settings.id],
   }),
 }));
 
@@ -256,3 +474,18 @@ export type NewJob = typeof jobs.$inferInsert;
 
 export type Scene = typeof scenes.$inferSelect;
 export type NewScene = typeof scenes.$inferInsert;
+
+export type Character = typeof characters.$inferSelect;
+export type NewCharacter = typeof characters.$inferInsert;
+
+export type Setting = typeof settings.$inferSelect;
+export type NewSetting = typeof settings.$inferInsert;
+
+export type CharacterChange = typeof characterChanges.$inferSelect;
+export type NewCharacterChange = typeof characterChanges.$inferInsert;
+
+export type CharacterEmbedding = typeof characterEmbeddings.$inferSelect;
+export type NewCharacterEmbedding = typeof characterEmbeddings.$inferInsert;
+
+export type SettingEmbedding = typeof settingEmbeddings.$inferSelect;
+export type NewSettingEmbedding = typeof settingEmbeddings.$inferInsert;

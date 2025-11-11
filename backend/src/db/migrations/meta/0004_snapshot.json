@@ -1,0 +1,1333 @@
+{
+  "id": "31b00409-0c99-4613-9ca4-cce75db9a00a",
+  "prevId": "c34e40a9-0afd-4194-941c-2bb455bfad7f",
+  "version": "5",
+  "dialect": "pg",
+  "tables": {
+    "api_keys": {
+      "name": "api_keys",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encrypted_key": {
+          "name": "encrypted_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "nickname": {
+          "name": "nickname",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_api_keys_user_id": {
+          "name": "idx_api_keys_user_id",
+          "columns": [
+            "user_id"
+          ],
+          "isUnique": false
+        },
+        "idx_api_keys_provider": {
+          "name": "idx_api_keys_provider",
+          "columns": [
+            "provider"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "api_keys_user_id_users_id_fk": {
+          "name": "api_keys_user_id_users_id_fk",
+          "tableFrom": "api_keys",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "character_changes": {
+      "name": "character_changes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "character_id": {
+          "name": "character_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scene_id": {
+          "name": "scene_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "change_type": {
+          "name": "change_type",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "prompt_modifier": {
+          "name": "prompt_modifier",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_character_changes_character_id": {
+          "name": "idx_character_changes_character_id",
+          "columns": [
+            "character_id"
+          ],
+          "isUnique": false
+        },
+        "idx_character_changes_scene_id": {
+          "name": "idx_character_changes_scene_id",
+          "columns": [
+            "scene_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "character_changes_character_id_characters_id_fk": {
+          "name": "character_changes_character_id_characters_id_fk",
+          "tableFrom": "character_changes",
+          "tableTo": "characters",
+          "columnsFrom": [
+            "character_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "character_changes_scene_id_scenes_id_fk": {
+          "name": "character_changes_scene_id_scenes_id_fk",
+          "tableFrom": "character_changes",
+          "tableTo": "scenes",
+          "columnsFrom": [
+            "scene_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "character_embeddings": {
+      "name": "character_embeddings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "character_id": {
+          "name": "character_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "embedding": {
+          "name": "embedding",
+          "type": "vector(1536)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "model": {
+          "name": "model",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_character_embeddings_character_id": {
+          "name": "idx_character_embeddings_character_id",
+          "columns": [
+            "character_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "character_embeddings_character_id_characters_id_fk": {
+          "name": "character_embeddings_character_id_characters_id_fk",
+          "tableFrom": "character_embeddings",
+          "tableTo": "characters",
+          "columnsFrom": [
+            "character_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "character_embeddings_character_id_unique": {
+          "name": "character_embeddings_character_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "character_id"
+          ]
+        }
+      }
+    },
+    "characters": {
+      "name": "characters",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "vivid_page_id": {
+          "name": "vivid_page_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "aliases": {
+          "name": "aliases",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "initial_appearance": {
+          "name": "initial_appearance",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reference_image_path": {
+          "name": "reference_image_path",
+          "type": "varchar(1000)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "role": {
+          "name": "role",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "first_appearance_scene": {
+          "name": "first_appearance_scene",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_characters_vivid_page_id": {
+          "name": "idx_characters_vivid_page_id",
+          "columns": [
+            "vivid_page_id"
+          ],
+          "isUnique": false
+        },
+        "idx_characters_name": {
+          "name": "idx_characters_name",
+          "columns": [
+            "name"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "characters_vivid_page_id_vivid_pages_id_fk": {
+          "name": "characters_vivid_page_id_vivid_pages_id_fk",
+          "tableFrom": "characters",
+          "tableTo": "vivid_pages",
+          "columnsFrom": [
+            "vivid_page_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "characters_first_appearance_scene_scenes_id_fk": {
+          "name": "characters_first_appearance_scene_scenes_id_fk",
+          "tableFrom": "characters",
+          "tableTo": "scenes",
+          "columnsFrom": [
+            "first_appearance_scene"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "jobs": {
+      "name": "jobs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "vivid_page_id": {
+          "name": "vivid_page_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "job_type": {
+          "name": "job_type",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'queued'"
+        },
+        "progress_percent": {
+          "name": "progress_percent",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "current_step": {
+          "name": "current_step",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_message": {
+          "name": "error_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "bull_job_id": {
+          "name": "bull_job_id",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "max_attempts": {
+          "name": "max_attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 3
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "idx_jobs_vivid_page_id": {
+          "name": "idx_jobs_vivid_page_id",
+          "columns": [
+            "vivid_page_id"
+          ],
+          "isUnique": false
+        },
+        "idx_jobs_user_id": {
+          "name": "idx_jobs_user_id",
+          "columns": [
+            "user_id"
+          ],
+          "isUnique": false
+        },
+        "idx_jobs_status": {
+          "name": "idx_jobs_status",
+          "columns": [
+            "status"
+          ],
+          "isUnique": false
+        },
+        "idx_jobs_job_type": {
+          "name": "idx_jobs_job_type",
+          "columns": [
+            "job_type"
+          ],
+          "isUnique": false
+        },
+        "idx_jobs_created_at": {
+          "name": "idx_jobs_created_at",
+          "columns": [
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "jobs_vivid_page_id_vivid_pages_id_fk": {
+          "name": "jobs_vivid_page_id_vivid_pages_id_fk",
+          "tableFrom": "jobs",
+          "tableTo": "vivid_pages",
+          "columnsFrom": [
+            "vivid_page_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "jobs_user_id_users_id_fk": {
+          "name": "jobs_user_id_users_id_fk",
+          "tableFrom": "jobs",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "scenes": {
+      "name": "scenes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "vivid_page_id": {
+          "name": "vivid_page_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "chapter_number": {
+          "name": "chapter_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "chapter_title": {
+          "name": "chapter_title",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scene_number": {
+          "name": "scene_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scene_index_global": {
+          "name": "scene_index_global",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "text_content": {
+          "name": "text_content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "word_count": {
+          "name": "word_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scene_type": {
+          "name": "scene_type",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'narrative'"
+        },
+        "has_dialogue": {
+          "name": "has_dialogue",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false,
+          "default": false
+        },
+        "character_count": {
+          "name": "character_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "llm_analysis": {
+          "name": "llm_analysis",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "analysis_status": {
+          "name": "analysis_status",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'pending'"
+        },
+        "analyzed_at": {
+          "name": "analyzed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "analysis_error": {
+          "name": "analysis_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "image_prompt": {
+          "name": "image_prompt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "storyboard_id": {
+          "name": "storyboard_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_scenes_vivid_page_id": {
+          "name": "idx_scenes_vivid_page_id",
+          "columns": [
+            "vivid_page_id"
+          ],
+          "isUnique": false
+        },
+        "idx_scenes_chapter": {
+          "name": "idx_scenes_chapter",
+          "columns": [
+            "vivid_page_id",
+            "chapter_number"
+          ],
+          "isUnique": false
+        },
+        "idx_scenes_global": {
+          "name": "idx_scenes_global",
+          "columns": [
+            "vivid_page_id",
+            "scene_index_global"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "scenes_vivid_page_id_vivid_pages_id_fk": {
+          "name": "scenes_vivid_page_id_vivid_pages_id_fk",
+          "tableFrom": "scenes",
+          "tableTo": "vivid_pages",
+          "columnsFrom": [
+            "vivid_page_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "sessions": {
+      "name": "sessions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "token": {
+          "name": "token",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_sessions_user_id": {
+          "name": "idx_sessions_user_id",
+          "columns": [
+            "user_id"
+          ],
+          "isUnique": false
+        },
+        "idx_sessions_token": {
+          "name": "idx_sessions_token",
+          "columns": [
+            "token"
+          ],
+          "isUnique": false
+        },
+        "idx_sessions_expires_at": {
+          "name": "idx_sessions_expires_at",
+          "columns": [
+            "expires_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "sessions_user_id_users_id_fk": {
+          "name": "sessions_user_id_users_id_fk",
+          "tableFrom": "sessions",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "sessions_token_unique": {
+          "name": "sessions_token_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "token"
+          ]
+        }
+      }
+    },
+    "setting_embeddings": {
+      "name": "setting_embeddings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "setting_id": {
+          "name": "setting_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "embedding": {
+          "name": "embedding",
+          "type": "vector(1536)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "model": {
+          "name": "model",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_setting_embeddings_setting_id": {
+          "name": "idx_setting_embeddings_setting_id",
+          "columns": [
+            "setting_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "setting_embeddings_setting_id_settings_id_fk": {
+          "name": "setting_embeddings_setting_id_settings_id_fk",
+          "tableFrom": "setting_embeddings",
+          "tableTo": "settings",
+          "columnsFrom": [
+            "setting_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "setting_embeddings_setting_id_unique": {
+          "name": "setting_embeddings_setting_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "setting_id"
+          ]
+        }
+      }
+    },
+    "settings": {
+      "name": "settings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "vivid_page_id": {
+          "name": "vivid_page_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "visual_keywords": {
+          "name": "visual_keywords",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "first_appearance_scene": {
+          "name": "first_appearance_scene",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_settings_vivid_page_id": {
+          "name": "idx_settings_vivid_page_id",
+          "columns": [
+            "vivid_page_id"
+          ],
+          "isUnique": false
+        },
+        "idx_settings_name": {
+          "name": "idx_settings_name",
+          "columns": [
+            "name"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "settings_vivid_page_id_vivid_pages_id_fk": {
+          "name": "settings_vivid_page_id_vivid_pages_id_fk",
+          "tableFrom": "settings",
+          "tableTo": "vivid_pages",
+          "columnsFrom": [
+            "vivid_page_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "settings_first_appearance_scene_scenes_id_fk": {
+          "name": "settings_first_appearance_scene_scenes_id_fk",
+          "tableFrom": "settings",
+          "tableTo": "scenes",
+          "columnsFrom": [
+            "first_appearance_scene"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "users": {
+      "name": "users",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "email": {
+          "name": "email",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "password_hash": {
+          "name": "password_hash",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "google_id": {
+          "name": "google_id",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "full_name": {
+          "name": "full_name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "avatar_url": {
+          "name": "avatar_url",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "email_verified": {
+          "name": "email_verified",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "last_login_at": {
+          "name": "last_login_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "idx_users_email": {
+          "name": "idx_users_email",
+          "columns": [
+            "email"
+          ],
+          "isUnique": false
+        },
+        "idx_users_google_id": {
+          "name": "idx_users_google_id",
+          "columns": [
+            "google_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "users_email_unique": {
+          "name": "users_email_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "email"
+          ]
+        },
+        "users_google_id_unique": {
+          "name": "users_google_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "google_id"
+          ]
+        }
+      }
+    },
+    "vivid_pages": {
+      "name": "vivid_pages",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "author": {
+          "name": "author",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "isbn": {
+          "name": "isbn",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "language": {
+          "name": "language",
+          "type": "varchar(10)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'en'"
+        },
+        "epub_filename": {
+          "name": "epub_filename",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "epub_path": {
+          "name": "epub_path",
+          "type": "varchar(1000)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "epub_size_bytes": {
+          "name": "epub_size_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "epub_hash": {
+          "name": "epub_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cover_image_path": {
+          "name": "cover_image_path",
+          "type": "varchar(1000)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "style_preset": {
+          "name": "style_preset",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "llm_model": {
+          "name": "llm_model",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "image_model": {
+          "name": "image_model",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "settings": {
+          "name": "settings",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'{}'::jsonb"
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'uploading'"
+        },
+        "progress_percent": {
+          "name": "progress_percent",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "current_step": {
+          "name": "current_step",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_message": {
+          "name": "error_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "total_chapters": {
+          "name": "total_chapters",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "total_scenes": {
+          "name": "total_scenes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "total_storyboards": {
+          "name": "total_storyboards",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "total_characters": {
+          "name": "total_characters",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "word_count": {
+          "name": "word_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "idx_vivid_pages_user_id": {
+          "name": "idx_vivid_pages_user_id",
+          "columns": [
+            "user_id"
+          ],
+          "isUnique": false
+        },
+        "idx_vivid_pages_status": {
+          "name": "idx_vivid_pages_status",
+          "columns": [
+            "status"
+          ],
+          "isUnique": false
+        },
+        "idx_vivid_pages_created_at": {
+          "name": "idx_vivid_pages_created_at",
+          "columns": [
+            "created_at"
+          ],
+          "isUnique": false
+        },
+        "idx_vivid_pages_hash": {
+          "name": "idx_vivid_pages_hash",
+          "columns": [
+            "epub_hash"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "vivid_pages_user_id_users_id_fk": {
+          "name": "vivid_pages_user_id_users_id_fk",
+          "tableFrom": "vivid_pages",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

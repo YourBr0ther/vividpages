@@ -29,6 +29,13 @@
       "when": 1762031002294,
       "tag": "0003_stiff_mercury",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1762894256353,
+      "tag": "0004_cold_cassandra_nova",
+      "breakpoints": true
     }
   ]
 }
