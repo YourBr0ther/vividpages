@@ -226,14 +226,21 @@ function formatApiKeyResponse(apiKey: ApiKey, decryptedKey: string): ApiKeyRespo
 }
 
 /**
- * Mask API key (show last 4 characters only)
+ * Mask API key (show prefix and last 4 characters)
  */
 function maskApiKey(apiKey: string): string {
   if (apiKey.length <= 4) {
     return '****';
   }
+
+  // For keys with common prefixes (sk-, pk-, etc.), show the prefix
+  const prefixMatch = apiKey.match(/^([a-z]{2}-)/);
+  const prefix = prefixMatch ? prefixMatch[1] : '';
+
   const lastFour = apiKey.slice(-4);
-  return `${'*'.repeat(apiKey.length - 4)}${lastFour}`;
+  const dots = '•'.repeat(8); // Use 8 bullets for consistent width
+
+  return prefix ? `${prefix}${dots}${lastFour}` : `${dots}${lastFour}`;
 }
 
 // ============================================
