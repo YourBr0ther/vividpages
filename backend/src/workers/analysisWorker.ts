@@ -3,7 +3,7 @@ import { connection } from '../queue/connection.js';
 import { db } from '../db/index.js';
 import { vividPages, scenes } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
-import { ollama } from '../lib/ollama.js';
+import { LLMFactory, LLMProvider, type BaseLLMService } from '../lib/llm/index.js';
 import { emitProgress, emitStatusUpdate, emitErrorUpdate, emitCompletion } from '../lib/progressEmitter.js';
 
 // ============================================
@@ -13,6 +13,8 @@ import { emitProgress, emitStatusUpdate, emitErrorUpdate, emitCompletion } from 
 interface AnalysisJobData {
   vividPageId: string;
   userId: string;
+  provider?: LLMProvider | string; // LLM provider to use (defaults to ollama)
+  model?: string; // Specific model to use (optional)
   limit?: number; // Optional: limit number of scenes to analyze
   timestamp: number;
 }
@@ -24,23 +26,33 @@ interface AnalysisJobData {
 export const analysisWorker = new Worker<AnalysisJobData>(
   'scene-analysis',
   async (job: Job<AnalysisJobData>) => {
-    const { vividPageId, userId, limit } = job.data;
+    const { vividPageId, userId, provider, model, limit } = job.data;
 
-    console.log(`\n🤖 Analyzing scenes for VividPage: ${vividPageId}${limit ? ` (limit: ${limit} scenes)` : ''}`);
+    const selectedProvider = provider || LLMProvider.OLLAMA; // Default to Ollama
+    console.log(`\n🤖 Analyzing scenes for VividPage: ${vividPageId}`);
+    console.log(`📡 Using provider: ${selectedProvider}${model ? ` (model: ${model})` : ''}${limit ? ` (limit: ${limit} scenes)` : ''}`);
+
+    let llmService: BaseLLMService;
 
     try {
       // ============================================
-      // Step 1: Check Ollama health
+      // Step 1: Create LLM service and check health
       // ============================================
       job.updateProgress(5);
       await updateVividPageProgress(vividPageId, 5, 'Connecting to LLM...');
 
-      const isHealthy = await ollama.checkHealth();
+      // Create LLM service using factory
+      llmService = await LLMFactory.create(userId, selectedProvider, {
+        model: model,
+      });
+
+      // Check health
+      const isHealthy = await llmService.checkHealth();
       if (!isHealthy) {
-        throw new Error('Ollama service is not available. Please ensure Ollama is running.');
+        throw new Error(`${selectedProvider} service is not available. Please check your configuration.`);
       }
 
-      console.log(`✅ Ollama is healthy`);
+      console.log(`✅ ${selectedProvider} is healthy (model: ${llmService.getModel()})`);
 
       // ============================================
       // Step 2: Get VividPage and scenes
@@ -120,11 +132,11 @@ export const analysisWorker = new Worker<AnalysisJobData>(
             })
             .where(eq(scenes.id, scene.id));
 
-          // Analyze the scene
-          const analysis = await ollama.analyzeScene(scene.textContent, scene.chapterTitle || undefined);
+          // Analyze the scene using the selected LLM service
+          const analysis = await llmService.analyzeScene(scene.textContent, scene.chapterTitle || undefined);
 
-          // Generate image prompt
-          const imagePrompt = ollama.generateImagePrompt(analysis);
+          // Generate image prompt (basic implementation, can be enhanced per provider)
+          const imagePrompt = generateImagePrompt(analysis);
 
           // Save analysis results
           await db.update(scenes)
@@ -261,6 +273,46 @@ async function updateVividPageProgress(
 
   // Emit real-time progress via Redis pub/sub -> Socket.IO
   emitProgress(vividPageId, progressPercent, currentStep);
+}
+
+/**
+ * Generate an image prompt from scene analysis
+ */
+function generateImagePrompt(analysis: any, style: string = 'realistic digital art'): string {
+  const parts: string[] = [style];
+
+  // Add characters
+  if (analysis.characters?.length > 0) {
+    const characterDescs = analysis.characters
+      .map((c: any) => `${c.name}: ${c.description}`)
+      .join(', ');
+    parts.push(characterDescs);
+  }
+
+  // Add setting
+  if (analysis.setting && analysis.setting !== 'Not specified') {
+    parts.push(analysis.setting);
+  }
+
+  // Add time and weather
+  if (analysis.timeOfDay) {
+    parts.push(analysis.timeOfDay);
+  }
+  if (analysis.weather) {
+    parts.push(analysis.weather);
+  }
+
+  // Add mood
+  if (analysis.mood) {
+    parts.push(`${analysis.mood} atmosphere`);
+  }
+
+  // Add visual elements
+  if (analysis.visualElements?.length > 0) {
+    parts.push(...analysis.visualElements.slice(0, 3)); // Top 3 visual elements
+  }
+
+  return parts.join(', ');
 }
 
 // ============================================
