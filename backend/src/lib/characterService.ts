@@ -486,6 +486,15 @@ export async function getCharactersByVividPage(vividPageId: string): Promise<Cha
 }
 
 /**
+ * Get a single character by ID
+ */
+export async function getCharacterById(characterId: string): Promise<Character | undefined> {
+  return await db.query.characters.findFirst({
+    where: eq(characters.id, characterId),
+  });
+}
+
+/**
  * Update character appearance
  */
 export async function updateCharacterAppearance(

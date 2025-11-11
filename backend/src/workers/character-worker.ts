@@ -12,6 +12,8 @@ import {
   createCharacter,
   type CharacterGroup,
 } from '../lib/characterService.js';
+import { generateCharacterEmbeddingsBatch } from '../lib/embeddingService.js';
+import { EmbeddingProvider } from '../lib/embedding/index.js';
 import { emitProgress, emitStatusUpdate, emitErrorUpdate, emitCompletion } from '../lib/progressEmitter.js';
 
 // ============================================
@@ -121,13 +123,14 @@ export const characterWorker = new Worker<CharacterDiscoveryJobData>(
       // Step 6: Build detailed profiles and save
       // ============================================
       let createdCount = 0;
+      const characterIds: string[] = [];
       const errors: Array<{ characterName: string; error: string }> = [];
 
       for (let i = 0; i < characterGroups.length; i++) {
         const group = characterGroups[i];
 
-        // Calculate progress (40% to 90%)
-        const progress = 40 + Math.floor((i / characterGroups.length) * 50);
+        // Calculate progress (40% to 80%)
+        const progress = 40 + Math.floor((i / characterGroups.length) * 40);
         job.updateProgress(progress);
         await updateVividPageProgress(
           vividPageId,
@@ -148,7 +151,7 @@ export const characterWorker = new Worker<CharacterDiscoveryJobData>(
           const firstAppearanceScene = group.mentions[0].sceneId;
 
           // Create character in database
-          await createCharacter({
+          const character = await createCharacter({
             vividPageId,
             name: group.primaryName,
             aliases: group.aliases,
@@ -157,6 +160,7 @@ export const characterWorker = new Worker<CharacterDiscoveryJobData>(
             firstAppearanceScene,
           });
 
+          characterIds.push(character.id);
           createdCount++;
           console.log(`✅ Created character: ${group.primaryName}`);
 
@@ -177,7 +181,40 @@ export const characterWorker = new Worker<CharacterDiscoveryJobData>(
       }
 
       // ============================================
-      // Step 7: Update VividPage with final status
+      // Step 7: Generate embeddings for characters
+      // ============================================
+      if (characterIds.length > 0) {
+        job.updateProgress(85);
+        await updateVividPageProgress(vividPageId, 85, 'Generating embeddings...');
+
+        console.log(`\n📊 Generating embeddings for ${characterIds.length} characters...`);
+
+        try {
+          // Use OpenAI embeddings by default, fall back to Ollama if not available
+          let embeddingProvider = EmbeddingProvider.OPENAI;
+
+          // Try to use the same provider as LLM for consistency
+          if (selectedProvider === LLMProvider.OLLAMA) {
+            embeddingProvider = EmbeddingProvider.OLLAMA;
+          }
+
+          const embeddingsGenerated = await generateCharacterEmbeddingsBatch(
+            characterIds,
+            userId,
+            embeddingProvider
+          );
+
+          console.log(`✅ Generated ${embeddingsGenerated} character embeddings`);
+
+        } catch (error) {
+          // Don't fail the whole job if embeddings fail - they can be generated later
+          console.error(`⚠️  Failed to generate embeddings:`, error);
+          console.log(`   Characters can still be used, embeddings can be generated later`);
+        }
+      }
+
+      // ============================================
+      // Step 8: Update VividPage with final status
       // ============================================
       job.updateProgress(95);
       await updateVividPageProgress(vividPageId, 95, 'Finalizing...');

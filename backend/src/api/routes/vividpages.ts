@@ -622,4 +622,114 @@ router.get('/:id/characters', authMiddleware, async (req: Request, res: Response
   }
 });
 
+/**
+ * Regenerate embedding for a character
+ * POST /api/vividpages/:id/characters/:characterId/regenerate-embedding
+ */
+router.post('/:id/characters/:characterId/regenerate-embedding', authMiddleware, async (req: Request, res: Response) => {
+  const { id, characterId } = req.params;
+  const { provider } = req.body; // Optional: 'openai' or 'ollama'
+  const user = req.user!;
+
+  try {
+    // Verify VividPage exists and belongs to user
+    const vividPage = await db.query.vividPages.findFirst({
+      where: and(eq(vividPages.id, id), eq(vividPages.userId, user.id)),
+    });
+
+    if (!vividPage) {
+      return res.status(404).json({ error: 'VividPage not found' });
+    }
+
+    // Verify character belongs to this VividPage
+    const { getCharacterById } = await import('../../lib/characterService.js');
+    const character = await getCharacterById(characterId);
+
+    if (!character || character.vividPageId !== id) {
+      return res.status(404).json({ error: 'Character not found' });
+    }
+
+    // Generate embedding
+    const { generateCharacterEmbedding } = await import('../../lib/embeddingService.js');
+    const { EmbeddingProvider } = await import('../../lib/embedding/index.js');
+
+    const embeddingProvider = provider === 'ollama' ? EmbeddingProvider.OLLAMA : EmbeddingProvider.OPENAI;
+    const embedding = await generateCharacterEmbedding(characterId, user.id, embeddingProvider);
+
+    console.log(`✅ Regenerated embedding for character ${character.name} (${embedding.length} dimensions)`);
+
+    res.json({
+      success: true,
+      message: 'Embedding regenerated successfully',
+      dimensions: embedding.length,
+      provider: embeddingProvider,
+    });
+  } catch (error) {
+    console.error('❌ Error regenerating embedding:', error);
+    res.status(500).json({
+      error: 'Failed to regenerate embedding',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * Find similar characters using vector similarity
+ * GET /api/vividpages/:id/characters/:characterId/similar
+ */
+router.get('/:id/characters/:characterId/similar', authMiddleware, async (req: Request, res: Response) => {
+  const { id, characterId } = req.params;
+  const { limit = '5', threshold = '0.7' } = req.query;
+  const user = req.user!;
+
+  try {
+    // Verify VividPage exists and belongs to user
+    const vividPage = await db.query.vividPages.findFirst({
+      where: and(eq(vividPages.id, id), eq(vividPages.userId, user.id)),
+    });
+
+    if (!vividPage) {
+      return res.status(404).json({ error: 'VividPage not found' });
+    }
+
+    // Verify character belongs to this VividPage
+    const { getCharacterById } = await import('../../lib/characterService.js');
+    const character = await getCharacterById(characterId);
+
+    if (!character || character.vividPageId !== id) {
+      return res.status(404).json({ error: 'Character not found' });
+    }
+
+    // Find similar characters
+    const { findSimilarCharacters } = await import('../../lib/embeddingService.js');
+    const similar = await findSimilarCharacters(
+      characterId,
+      parseInt(limit as string),
+      parseFloat(threshold as string)
+    );
+
+    res.json({
+      success: true,
+      character: {
+        id: character.id,
+        name: character.name,
+      },
+      similar: similar.map(s => ({
+        id: s.character.id,
+        name: s.character.name,
+        aliases: s.character.aliases,
+        role: s.character.role,
+        similarity: s.similarity,
+      })),
+      totalResults: similar.length,
+    });
+  } catch (error) {
+    console.error('❌ Error finding similar characters:', error);
+    res.status(500).json({
+      error: 'Failed to find similar characters',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
 export default router;
