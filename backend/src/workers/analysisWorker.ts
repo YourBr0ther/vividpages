@@ -218,6 +218,19 @@ export const analysisWorker = new Worker<AnalysisJobData>(
 
       console.log(`\n✅ Successfully analyzed scenes for VividPage: ${vividPageId}\n`);
 
+      // Auto-trigger character discovery if analysis was successful
+      if (!hasErrors && finalStatus === 'analyzed') {
+        console.log(`🔍 Auto-queueing character discovery for VividPage: ${vividPageId}`);
+        try {
+          const { queueCharacterDiscovery } = await import('../queue/queues.js');
+          await queueCharacterDiscovery(vividPageId, userId, selectedProvider);
+          console.log(`✅ Character discovery job queued`);
+        } catch (error) {
+          console.error(`⚠️  Failed to queue character discovery:`, error);
+          // Don't fail the analysis job if character discovery queueing fails
+        }
+      }
+
       return {
         success: true,
         vividPageId,

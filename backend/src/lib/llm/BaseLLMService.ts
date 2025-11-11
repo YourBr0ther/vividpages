@@ -120,7 +120,17 @@ Provide your analysis as a JSON object with this exact structure:
   "characters": [
     {
       "name": "Character Name",
-      "description": "Brief physical description and role in this scene"
+      "description": "COMPREHENSIVE visual description for image generation. Include:
+        - Physical build: height, body type, proportions, bust size (if applicable)
+        - Facial features: face shape, eye color/shape, eyebrows, nose, lips, jawline, cheekbones
+        - Hair: color, style, length, texture, facial hair (if applicable)
+        - Skin: tone, ethnicity, complexion
+        - Age: specific or estimated, how they appear
+        - Distinctive features: scars, tattoos, piercings, birthmarks, unique characteristics
+        - Clothing: what they're wearing, colors, style, accessories
+        - Posture and bearing: how they carry themselves, gait
+        - Voice/speech patterns if mentioned
+        BE EXTREMELY DETAILED - imagine describing for an artist to draw this character"
     }
   ],
   "setting": "Description of the location/setting",
@@ -133,8 +143,11 @@ Provide your analysis as a JSON object with this exact structure:
 
 IMPORTANT:
 - Only include characters that are actually present and active in THIS scene
-- Keep descriptions concise but specific
-- Focus on visual details that would matter for image generation
+- For character descriptions, be EXTREMELY detailed and specific
+- Focus on visual details that would matter for consistent image generation across scenes
+- Include physical measurements, proportions, and distinctive features
+- Note ethnicity, skin tone, and cultural appearance markers
+- Describe clothing style, colors, and accessories
 - Return ONLY the JSON object, no additional text`;
   }
 

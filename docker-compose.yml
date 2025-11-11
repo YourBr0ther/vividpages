@@ -189,6 +189,34 @@ services:
     networks:
       - backend-network
 
+  # Character Worker (discovers and deduplicates characters)
+  character-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vividpages-character-worker
+    restart: unless-stopped
+    command: pnpm worker:character
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-vividpages}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-vividpages}
+      REDIS_URL: redis://redis:6379
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://10.0.2.177:11434}
+      CHARACTER_WORKERS: ${CHARACTER_WORKERS:-1}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+    volumes:
+      - ./backend/src:/app/src
+      - /app/node_modules
+    networks:
+      - backend-network
+
   # Caddy Reverse Proxy (optional, for production)
   # caddy:
   #   image: caddy:2-alpine

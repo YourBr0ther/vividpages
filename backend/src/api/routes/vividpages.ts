@@ -532,4 +532,94 @@ router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Trigger character discovery
+ * POST /api/vividpages/:id/discover-characters
+ */
+router.post('/:id/discover-characters', authMiddleware, async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const user = req.user!;
+
+  try {
+    // Verify VividPage exists and belongs to user
+    const vividPage = await db.query.vividPages.findFirst({
+      where: and(eq(vividPages.id, id), eq(vividPages.userId, user.id)),
+    });
+
+    if (!vividPage) {
+      return res.status(404).json({ error: 'VividPage not found' });
+    }
+
+    // Check if scene analysis is complete
+    if (vividPage.status !== 'analyzed' && vividPage.status !== 'characters_discovered') {
+      return res.status(400).json({
+        error: 'Cannot discover characters - scene analysis not complete',
+        currentStatus: vividPage.status,
+      });
+    }
+
+    // Queue character discovery job
+    const { queueCharacterDiscovery } = await import('../../queue/queues.js');
+    const job = await queueCharacterDiscovery(id, user.id);
+
+    console.log(`✅ Queued character discovery job ${job.id} for VividPage ${id}`);
+
+    res.json({
+      success: true,
+      message: 'Character discovery job queued',
+      jobId: job.id,
+    });
+  } catch (error) {
+    console.error('❌ Error queuing character discovery:', error);
+    res.status(500).json({
+      error: 'Failed to queue character discovery',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * Get all characters for a VividPage
+ * GET /api/vividpages/:id/characters
+ */
+router.get('/:id/characters', authMiddleware, async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const user = req.user!;
+
+  try {
+    // Verify VividPage exists and belongs to user
+    const vividPage = await db.query.vividPages.findFirst({
+      where: and(eq(vividPages.id, id), eq(vividPages.userId, user.id)),
+    });
+
+    if (!vividPage) {
+      return res.status(404).json({ error: 'VividPage not found' });
+    }
+
+    // Get all characters
+    const { getCharactersByVividPage } = await import('../../lib/characterService.js');
+    const characters = await getCharactersByVividPage(id);
+
+    res.json({
+      success: true,
+      totalCharacters: characters.length,
+      characters: characters.map(char => ({
+        id: char.id,
+        name: char.name,
+        aliases: char.aliases,
+        role: char.role,
+        initialAppearance: char.initialAppearance,
+        firstAppearanceScene: char.firstAppearanceScene,
+        createdAt: char.createdAt,
+      })),
+    });
+  } catch (error) {
+    console.error('❌ Error fetching characters:', error);
+    res.status(500).json({
+      error: 'Failed to fetch characters',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
 export default router;

@@ -1,6 +1,6 @@
 # Phase 3: LLM Integration & Analysis - Progress Tracker
 
-**Status:** 🟡 IN PROGRESS (3 of 10 tasks complete)
+**Status:** 🟡 IN PROGRESS (4 of 10 tasks complete)
 **Started:** November 11, 2025
 **Goal:** Integrate LLMs to analyze book content and extract character/scene data
 
@@ -134,16 +134,97 @@ Phase 3 builds the intelligence layer of VividPages by using LLMs to analyze sce
 
 ---
 
-### ⏸️ Task 4: Character Discovery System (PENDING)
-**Status:** Not started
+### ✅ Task 4: Character Discovery System (COMPLETE)
+**Completed:** November 11, 2025
+**Time:** ~4 hours
 
-**Goal:** Extract and deduplicate all characters from a book
+**Goal:** Extract and deduplicate all characters with comprehensive visual descriptions
 
-**Components:**
-- Character discovery service
-- Character deduplication algorithm
-- Character worker
-- Queue integration
+**Deliverables:**
+
+**Backend - Character Service** (`backend/src/lib/characterService.ts`):
+- ✅ `extractCharactersFromScenes()` - Extracts all character mentions from analyzed scenes
+- ✅ `deduplicateCharacters()` - Uses LLM to identify same character with different names
+  - Phase 1: Exact name matching (case-insensitive)
+  - Phase 2: LLM-based matching with confidence scoring
+  - Handles variations like "Jon"/"Jon Snow"/"Lord Snow"
+- ✅ `buildDetailedCharacterProfile()` - Synthesizes comprehensive appearance from all mentions
+  - 25+ appearance attributes per character
+  - Physical build, facial features, hair, skin tone, ethnicity, clothing
+  - Posture, gait, voice, distinctive features
+  - Structured JSONB format for database storage
+- ✅ `determineCharacterRole()` - Classifies as protagonist/supporting/minor based on frequency
+- ✅ Database operations: create, get, update, delete characters
+
+**Backend - Character Worker** (`backend/src/workers/character-worker.ts`):
+- ✅ Background worker for character discovery jobs
+- ✅ Progress tracking (0-100%) with real-time Socket.IO events
+- ✅ Error handling and retry logic
+- ✅ Auto-updates VividPage.totalCharacters
+
+**Backend - Queue Integration** (`backend/src/queue/queues.ts`):
+- ✅ Character discovery queue with BullMQ
+- ✅ `queueCharacterDiscovery()` function
+- ✅ Queue event listeners and cleanup
+
+**Backend - Auto-trigger** (`backend/src/workers/analysisWorker.ts`):
+- ✅ Automatically queues character discovery after scene analysis completes
+- ✅ Seamless workflow: EPUB → Scenes → Analysis → Characters
+
+**Backend - API Routes** (`backend/src/api/routes/vividpages.ts`):
+- ✅ POST `/api/vividpages/:id/discover-characters` - Manual trigger
+- ✅ GET `/api/vividpages/:id/characters` - List all characters with profiles
+
+**Backend - Enhanced Scene Analysis** (`backend/src/lib/llm/BaseLLMService.ts`):
+- ✅ Updated prompts to extract EXTREMELY detailed character descriptions
+- ✅ Requests 20+ visual attributes per character appearance
+- ✅ Includes: height, build, face shape, eye/hair details, skin tone, ethnicity, clothing, etc.
+
+**Infrastructure:**
+- ✅ Docker service: `character-worker` in docker-compose.yml
+- ✅ Package script: `pnpm worker:character`
+- ✅ Environment variables: CHARACTER_WORKERS
+
+**Character Profile Structure (JSONB):**
+```json
+{
+  "height": "tall (~6'2\")",
+  "build": "athletic",
+  "bodyType": "lean and muscular",
+  "faceShape": "oval with strong jawline",
+  "eyeColor": "grey",
+  "eyeShape": "intense, deep-set",
+  "hairColor": "dark brown, almost black",
+  "hairStyle": "shoulder-length, often tied back",
+  "hairTexture": "straight",
+  "skinTone": "fair",
+  "ethnicity": "Northern European features",
+  "age": "~25 years",
+  "distinctiveFeatures": ["scar above left eyebrow", "stern expression"],
+  "typicalClothing": "black leather and furs",
+  "clothingColors": ["black", "dark grey", "silver"],
+  "accessories": ["longsword", "direwolf sigil"],
+  "posture": "upright, militaristic bearing",
+  "gait": "purposeful stride",
+  "physicalDescription": "Full narrative description...",
+  "visualSummary": "Concise description for image prompts..."
+}
+```
+
+**Technical Achievements:**
+- LLM-powered deduplication with 80%+ confidence threshold
+- Synthesis of character details from multiple scene appearances
+- Comprehensive visual profiling for consistent image generation
+- Automatic workflow integration
+- Real-time progress tracking
+
+**Example Workflow:**
+1. User uploads EPUB → Scenes extracted
+2. LLM analyzes each scene → Character mentions collected
+3. Character discovery triggered automatically
+4. Characters deduplicated (e.g., merges "Harry"/"Harry Potter")
+5. Detailed profiles built from all mentions
+6. Stored in database with role classification
 
 ---
 
@@ -236,7 +317,7 @@ Phase 3 builds the intelligence layer of VividPages by using LLMs to analyze sce
 - **Task 1:** ✅ Complete (2.5 hours)
 - **Task 2:** ✅ Complete (3 hours)
 - **Task 3:** ✅ Complete (2 hours)
-- **Task 4:** 2-3 days (Character discovery)
+- **Task 4:** ✅ Complete (4 hours)
 - **Task 5:** 2 days (Embeddings)
 - **Task 6:** 1-2 days (Settings)
 - **Task 7:** 2 days (Character changes)
@@ -244,7 +325,7 @@ Phase 3 builds the intelligence layer of VividPages by using LLMs to analyze sce
 - **Task 9:** 2 days (Prompt generation)
 - **Task 10:** 2-3 days (Frontend wizard)
 
-**Total Remaining:** ~2 weeks
+**Total Remaining:** ~1.5-2 weeks
 
 ---
 
@@ -265,11 +346,12 @@ e1e73c0 Task 2: LLM Client Abstraction - Complete
 1. ✅ Complete Task 1: API Key Management
 2. ✅ Complete Task 2: LLM Client Abstraction
 3. ✅ Complete Task 3: Database Schema Updates
-4. 🔵 Start Task 4: Character Discovery System
-5. Implement character extraction from scenes
-6. Build character deduplication algorithm
+4. ✅ Complete Task 4: Character Discovery System
+5. 🔵 Start Task 5: Embedding Generation
+6. Implement character and setting embedding generation
+7. Add vector similarity search for deduplication
 
 ---
 
 **Last Updated:** November 11, 2025
-**Phase Completion:** 30% (3/10 tasks complete)
+**Phase Completion:** 40% (4/10 tasks complete)

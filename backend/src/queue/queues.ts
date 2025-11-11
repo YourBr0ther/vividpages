@@ -56,6 +56,28 @@ export const sceneAnalysisQueue = new Queue('scene-analysis', {
 export const llmQueue = sceneAnalysisQueue;
 
 /**
+ * Character Discovery Queue
+ * Handles character extraction and deduplication
+ */
+export const characterDiscoveryQueue = new Queue('character-discovery', {
+  connection,
+  defaultJobOptions: {
+    attempts: 2,
+    backoff: {
+      type: 'exponential',
+      delay: 10000, // Start with 10 second delay
+    },
+    removeOnComplete: {
+      age: 24 * 3600,
+      count: 50,
+    },
+    removeOnFail: {
+      age: 7 * 24 * 3600,
+    },
+  },
+});
+
+/**
  * Image Generation Queue
  * Handles storyboard image generation
  */
@@ -111,6 +133,22 @@ llmQueue.on('completed', (job) => {
 
 llmQueue.on('failed', (job, err) => {
   console.error(`❌ LLM job ${job?.id} failed:`, err.message);
+});
+
+characterDiscoveryQueue.on('waiting', (job) => {
+  console.log(`📋 Character discovery job ${job.id} is waiting`);
+});
+
+characterDiscoveryQueue.on('active', (job) => {
+  console.log(`⚙️  Character discovery job ${job.id} is now active`);
+});
+
+characterDiscoveryQueue.on('completed', (job) => {
+  console.log(`✅ Character discovery job ${job.id} completed`);
+});
+
+characterDiscoveryQueue.on('failed', (job, err) => {
+  console.error(`❌ Character discovery job ${job?.id} failed:`, err.message);
 });
 
 imageQueue.on('waiting', (job) => {
@@ -182,6 +220,27 @@ export async function queueLlmAnalysis(vividPageId: string, userId: string, sett
 }
 
 /**
+ * Add character discovery job to queue
+ */
+export async function queueCharacterDiscovery(vividPageId: string, userId: string, provider?: string) {
+  const job = await characterDiscoveryQueue.add(
+    'discover-characters',
+    {
+      vividPageId,
+      userId,
+      provider, // Optional: which LLM provider to use
+      timestamp: Date.now(),
+    },
+    {
+      jobId: `characters-${vividPageId}`,
+    }
+  );
+
+  console.log(`📤 Queued character discovery job: ${job.id}`);
+  return job;
+}
+
+/**
  * Add image generation job to queue
  */
 export async function queueImageGeneration(vividPageId: string, userId: string, settings: any) {
@@ -217,6 +276,9 @@ export async function getJobStatus(queueName: string, jobId: string) {
       break;
     case 'llm-analysis':
       queue = llmQueue;
+      break;
+    case 'character-discovery':
+      queue = characterDiscoveryQueue;
       break;
     case 'image-generation':
       queue = imageQueue;
@@ -258,6 +320,9 @@ export async function cleanupOldJobs() {
   await sceneAnalysisQueue.clean(24 * 3600 * 1000, 50, 'completed');
   await sceneAnalysisQueue.clean(7 * 24 * 3600 * 1000, 0, 'failed');
 
+  await characterDiscoveryQueue.clean(24 * 3600 * 1000, 50, 'completed');
+  await characterDiscoveryQueue.clean(7 * 24 * 3600 * 1000, 0, 'failed');
+
   await imageQueue.clean(24 * 3600 * 1000, 50, 'completed');
   await imageQueue.clean(7 * 24 * 3600 * 1000, 0, 'failed');
 
@@ -273,6 +338,7 @@ export async function closeQueues() {
 
   await epubQueue.close();
   await sceneAnalysisQueue.close();
+  await characterDiscoveryQueue.close();
   await imageQueue.close();
   await connection.quit();
 

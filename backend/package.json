@@ -9,6 +9,7 @@
     "start": "node dist/api/server.js",
     "worker:epub": "tsx src/workers/epub-worker.ts",
     "worker:analysis": "tsx src/workers/analysis-worker.ts",
+    "worker:character": "tsx src/workers/character-worker.ts",
     "worker:llm": "tsx src/workers/llm-worker.ts",
     "worker:image": "tsx src/workers/image-worker.ts",
     "db:generate": "drizzle-kit generate:pg",
