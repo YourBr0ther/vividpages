@@ -194,6 +194,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      target: development
     container_name: vividpages-character-worker
     restart: unless-stopped
     command: pnpm worker:character
@@ -208,7 +209,7 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://10.0.2.177:11434}
+      OLLAMA_HOST: http://ollama:11434
       CHARACTER_WORKERS: ${CHARACTER_WORKERS:-1}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
     volumes:

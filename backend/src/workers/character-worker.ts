@@ -1,7 +1,7 @@
 import { Worker, Job } from 'bullmq';
 import { connection } from '../queue/connection.js';
 import { db } from '../db/index.js';
-import { vividPages, characters } from '../db/schema.js';
+import { vividPages } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { LLMFactory, LLMProvider, type BaseLLMService } from '../lib/llm/index.js';
 import {
@@ -10,7 +10,6 @@ import {
   buildDetailedCharacterProfile,
   determineCharacterRole,
   createCharacter,
-  type CharacterGroup,
 } from '../lib/characterService.js';
 import { generateCharacterEmbeddingsBatch } from '../lib/embeddingService.js';
 import { EmbeddingProvider } from '../lib/embedding/index.js';

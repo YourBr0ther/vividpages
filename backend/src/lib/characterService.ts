@@ -9,7 +9,7 @@
  */
 
 import { db } from '../db/index.js';
-import { characters, scenes, vividPages, type Character, type NewCharacter, type Scene } from '../db/schema.js';
+import { characters, scenes, type Character } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import type { BaseLLMService } from './llm/BaseLLMService.js';
 
@@ -239,7 +239,7 @@ export async function deduplicateCharacters(
   console.log(`📊 Phase 1: ${exactGroups.size} exact name groups`);
 
   // Convert to array for Phase 2
-  const groups: CharacterGroup[] = Array.from(exactGroups.entries()).map(([name, mentions]) => ({
+  const groups: CharacterGroup[] = Array.from(exactGroups.entries()).map(([_name, mentions]) => ({
     primaryName: mentions[0].name, // Use original casing from first mention
     aliases: [],
     mentions,

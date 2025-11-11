@@ -1,7 +1,7 @@
 import { db } from '../db/index.js';
 import { characters, characterEmbeddings, settings, settingEmbeddings, type Character, type Setting } from '../db/schema.js';
 import { eq, sql } from 'drizzle-orm';
-import { BaseEmbeddingService, EmbeddingFactory, EmbeddingProvider } from './embedding/index.js';
+import { EmbeddingFactory, EmbeddingProvider } from './embedding/index.js';
 
 // ============================================
 // Embedding Service
@@ -68,40 +68,17 @@ export function generateCharacterEmbeddingText(character: Character): string {
 export function generateSettingEmbeddingText(setting: Setting): string {
   const parts: string[] = [];
 
-  // Add name and aliases
+  // Add name
   parts.push(`Location: ${setting.name}`);
-  if (setting.aliases && setting.aliases.length > 0) {
-    parts.push(`Also known as: ${setting.aliases.join(', ')}`);
+
+  // Add description
+  if (setting.description) {
+    parts.push(setting.description);
   }
 
-  // Add type if available
-  if (setting.type) {
-    parts.push(`Type: ${setting.type}`);
-  }
-
-  // Add description details from JSONB
-  const description = setting.description as any;
-  if (description) {
-    if (typeof description === 'string') {
-      parts.push(description);
-    } else if (description.fullDescription) {
-      parts.push(description.fullDescription);
-    }
-
-    // Add key setting attributes if stored as object
-    if (typeof description === 'object') {
-      const attributes = [
-        description.environment,
-        description.atmosphere,
-        description.visualElements,
-        description.timeOfDay,
-        description.weather,
-      ].filter(Boolean);
-
-      if (attributes.length > 0) {
-        parts.push(attributes.join(', '));
-      }
-    }
+  // Add visual keywords
+  if (setting.visualKeywords && setting.visualKeywords.length > 0) {
+    parts.push(`Visual elements: ${setting.visualKeywords.join(', ')}`);
   }
 
   return parts.join('. ');
