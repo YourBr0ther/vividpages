@@ -381,6 +381,7 @@ router.post('/:id/analyze', authMiddleware, async (req: Request, res: Response) 
   try {
     const user = req.user!;
     const { id } = req.params;
+    const { limit } = req.body; // Optional: limit number of scenes to analyze
 
     // Verify ownership
     const vividPage = await db.query.vividPages.findFirst({
@@ -414,21 +415,22 @@ router.post('/:id/analyze', authMiddleware, async (req: Request, res: Response) 
       });
     }
 
-    console.log(`🤖 Triggering analysis for VividPage: ${id}`);
+    const scenesToAnalyze = limit ? Math.min(limit, sceneCount.length) : sceneCount.length;
+    console.log(`🤖 Triggering analysis for VividPage: ${id} (${scenesToAnalyze} scenes)`);
 
     // Update status to analyzing
     await db.update(vividPages)
       .set({
         status: 'analyzing',
         progressPercent: 10,
-        currentStep: 'Queueing scene analysis...',
+        currentStep: `Queueing scene analysis... (${scenesToAnalyze} scenes)`,
         updatedAt: new Date(),
       })
       .where(eq(vividPages.id, id));
 
-    // Queue the analysis job
+    // Queue the analysis job with optional limit
     const { queueSceneAnalysis } = await import('../../queue/queues.js');
-    const job = await queueSceneAnalysis(id, user.id);
+    const job = await queueSceneAnalysis(id, user.id, limit);
 
     console.log(`✅ Queued scene analysis job ${job.id} for VividPage ${id}`);
 

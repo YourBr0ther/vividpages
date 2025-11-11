@@ -156,12 +156,13 @@ export async function queueEpubParsing(vividPageId: string, userId: string) {
 /**
  * Add scene analysis job to queue
  */
-export async function queueSceneAnalysis(vividPageId: string, userId: string) {
+export async function queueSceneAnalysis(vividPageId: string, userId: string, limit?: number) {
   const job = await sceneAnalysisQueue.add(
     'analyze-scenes',
     {
       vividPageId,
       userId,
+      limit, // Optional: limit number of scenes to analyze
       timestamp: Date.now(),
     },
     {
@@ -169,7 +170,7 @@ export async function queueSceneAnalysis(vividPageId: string, userId: string) {
     }
   );
 
-  console.log(`📤 Queued scene analysis job: ${job.id}`);
+  console.log(`📤 Queued scene analysis job: ${job.id}${limit ? ` (limit: ${limit} scenes)` : ''}`);
   return job;
 }
 

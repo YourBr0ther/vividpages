@@ -9,6 +9,7 @@ export default function VividPageViewer() {
   const navigate = useNavigate();
   const [selectedScene, setSelectedScene] = useState<Scene | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [sceneLimit, setSceneLimit] = useState<number>(5); // Default to 5 scenes for testing
 
   // Fetch VividPage details
   const { data: vividPage, refetch: refetchVividPage, isLoading: isLoadingVividPage } = useQuery({
@@ -36,8 +37,8 @@ export default function VividPageViewer() {
 
     try {
       setIsAnalyzing(true);
-      await triggerSceneAnalysis(id);
-      toast.success('Scene analysis started!');
+      await triggerSceneAnalysis(id, sceneLimit || undefined);
+      toast.success(`Scene analysis started! (${sceneLimit > 0 ? `${sceneLimit} scenes` : 'all scenes'})`);
       refetchVividPage();
       refetchScenes();
     } catch (error: any) {
@@ -139,16 +140,35 @@ export default function VividPageViewer() {
 
             {/* Action Button */}
             {canAnalyze && !isCurrentlyAnalyzing && (
-              <button
-                onClick={handleTriggerAnalysis}
-                disabled={isAnalyzing}
-                className="inline-flex items-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                </svg>
-                {isAnalyzing ? 'Starting...' : 'Analyze Scenes'}
-              </button>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <label htmlFor="sceneLimit" className="text-sm font-medium text-gray-700">
+                    Analyze:
+                  </label>
+                  <input
+                    id="sceneLimit"
+                    type="number"
+                    min="0"
+                    max={vividPage.totalScenes || 999}
+                    value={sceneLimit}
+                    onChange={(e) => setSceneLimit(Number(e.target.value))}
+                    className="w-20 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <span className="text-sm text-gray-600">
+                    of {vividPage.totalScenes} scenes
+                  </span>
+                </div>
+                <button
+                  onClick={handleTriggerAnalysis}
+                  disabled={isAnalyzing}
+                  className="inline-flex items-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                  </svg>
+                  {isAnalyzing ? 'Starting...' : 'Analyze'}
+                </button>
+              </div>
             )}
 
             {isCurrentlyAnalyzing && (
@@ -184,7 +204,7 @@ export default function VividPageViewer() {
                   >
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-sm font-medium text-gray-900">
-                        Scene {scene.sceneNumber}
+                        Scene {scene.sceneIndexGlobal + 1}
                       </span>
                       {scene.analysisStatus === 'completed' && (
                         <svg className="w-4 h-4 text-green-600" fill="currentColor" viewBox="0 0 20 20">
@@ -212,7 +232,7 @@ export default function VividPageViewer() {
                   <div className="flex items-start justify-between mb-2">
                     <div>
                       <h3 className="text-2xl font-semibold text-gray-900">
-                        Scene {selectedScene.sceneNumber}
+                        Scene {selectedScene.sceneIndexGlobal + 1}
                       </h3>
                       <p className="text-gray-600">{selectedScene.chapterTitle}</p>
                     </div>
@@ -235,7 +255,7 @@ export default function VividPageViewer() {
                   <div className="flex gap-4 text-sm text-gray-600">
                     <span>{selectedScene.wordCount} words</span>
                     <span>•</span>
-                    <span>Chapter {selectedScene.chapterNumber}</span>
+                    <span>{selectedScene.chapterTitle}</span>
                     {selectedScene.hasDialogue && (
                       <>
                         <span>•</span>

@@ -13,6 +13,7 @@ import { emitProgress, emitStatusUpdate, emitErrorUpdate, emitCompletion } from 
 interface AnalysisJobData {
   vividPageId: string;
   userId: string;
+  limit?: number; // Optional: limit number of scenes to analyze
   timestamp: number;
 }
 
@@ -23,9 +24,9 @@ interface AnalysisJobData {
 export const analysisWorker = new Worker<AnalysisJobData>(
   'scene-analysis',
   async (job: Job<AnalysisJobData>) => {
-    const { vividPageId, userId } = job.data;
+    const { vividPageId, userId, limit } = job.data;
 
-    console.log(`\n🤖 Analyzing scenes for VividPage: ${vividPageId}`);
+    console.log(`\n🤖 Analyzing scenes for VividPage: ${vividPageId}${limit ? ` (limit: ${limit} scenes)` : ''}`);
 
     try {
       // ============================================
@@ -62,6 +63,7 @@ export const analysisWorker = new Worker<AnalysisJobData>(
           eq(scenes.analysisStatus, 'pending')
         ),
         orderBy: [scenes.sceneIndexGlobal],
+        limit: limit || undefined, // Apply limit if provided
       });
 
       if (allScenes.length === 0) {
@@ -74,7 +76,7 @@ export const analysisWorker = new Worker<AnalysisJobData>(
         };
       }
 
-      console.log(`📊 Found ${allScenes.length} scenes to analyze`);
+      console.log(`📊 Found ${allScenes.length} scenes to analyze${limit ? ` (limited to ${limit})` : ''}`);
 
       // ============================================
       // Step 3: Update VividPage status

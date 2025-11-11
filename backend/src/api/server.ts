@@ -6,6 +6,7 @@ import { createServer } from 'http';
 import { pool } from '../db/index.js';
 import authRoutes from './routes/auth.js';
 import vividpagesRoutes from './routes/vividpages.js';
+import apiKeysRoutes from './routes/apiKeys.js';
 import { apiLimiter } from './middleware/rateLimiter.js';
 import passport from '../lib/passport.js';
 import { initializeSocket } from '../lib/socket.js';
@@ -73,6 +74,9 @@ app.use('/api/auth', authRoutes);
 
 // VividPages routes
 app.use('/api/vividpages', vividpagesRoutes);
+
+// API Keys routes
+app.use('/api/api-keys', apiKeysRoutes);
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {

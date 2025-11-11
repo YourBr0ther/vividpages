@@ -289,7 +289,7 @@ export const deleteVividPage = async (id: string): Promise<{
 /**
  * Trigger scene analysis for a VividPage
  */
-export const triggerSceneAnalysis = async (id: string): Promise<{
+export const triggerSceneAnalysis = async (id: string, limit?: number): Promise<{
   success: boolean;
   message: string;
   vividPage: {
@@ -298,7 +298,7 @@ export const triggerSceneAnalysis = async (id: string): Promise<{
     progressPercent: number;
   };
 }> => {
-  const response = await api.post(`/api/vividpages/${id}/analyze`);
+  const response = await api.post(`/api/vividpages/${id}/analyze`, { limit });
   return response.data;
 };
 
@@ -307,6 +307,77 @@ export const triggerSceneAnalysis = async (id: string): Promise<{
  */
 export const getScene = async (vividPageId: string, sceneId: string): Promise<Scene> => {
   const response = await api.get<Scene>(`/api/vividpages/${vividPageId}/scenes/${sceneId}`);
+  return response.data;
+};
+
+// ============================================
+// API Keys
+// ============================================
+
+export interface ApiKey {
+  id: string;
+  provider: string;
+  nickname: string | null;
+  maskedKey: string;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreateApiKeyData {
+  provider: 'claude' | 'chatgpt' | 'ollama' | 'dall-e' | 'stable-diffusion' | 'other';
+  apiKey: string;
+  nickname?: string;
+}
+
+export interface UpdateApiKeyData {
+  provider?: string;
+  apiKey?: string;
+  nickname?: string;
+}
+
+export interface TestApiKeyResult {
+  success: boolean;
+  message: string;
+  details?: any;
+}
+
+/**
+ * Get all API keys for the authenticated user
+ */
+export const getApiKeys = async (): Promise<ApiKey[]> => {
+  const response = await api.get<{ success: boolean; apiKeys: ApiKey[] }>('/api/api-keys');
+  return response.data.apiKeys;
+};
+
+/**
+ * Create a new API key
+ */
+export const createApiKey = async (data: CreateApiKeyData): Promise<ApiKey> => {
+  const response = await api.post<{ success: boolean; apiKey: ApiKey; message: string }>('/api/api-keys', data);
+  return response.data.apiKey;
+};
+
+/**
+ * Update an existing API key
+ */
+export const updateApiKey = async (id: string, data: UpdateApiKeyData): Promise<ApiKey> => {
+  const response = await api.put<{ success: boolean; apiKey: ApiKey; message: string }>(`/api/api-keys/${id}`, data);
+  return response.data.apiKey;
+};
+
+/**
+ * Delete an API key
+ */
+export const deleteApiKey = async (id: string): Promise<void> => {
+  await api.delete(`/api/api-keys/${id}`);
+};
+
+/**
+ * Test an API key before saving
+ */
+export const testApiKey = async (provider: string, apiKey: string): Promise<TestApiKeyResult> => {
+  const response = await api.post<TestApiKeyResult>('/api/api-keys/test', { provider, apiKey });
   return response.data;
 };
 
