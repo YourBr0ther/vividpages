@@ -148,7 +148,7 @@ export interface VividPage {
   llmModel: string | null;
   imageModel: string | null;
   settings: Record<string, any>;
-  status: 'uploading' | 'parsing' | 'scenes_detected' | 'analyzing' | 'generating' | 'completed' | 'failed';
+  status: 'uploading' | 'parsing' | 'scenes_detected' | 'analyzing' | 'analyzed' | 'discovering_characters' | 'building_character_profiles' | 'characters_discovered' | 'generating' | 'completed' | 'failed';
   progressPercent: number;
   currentStep: string | null;
   errorMessage: string | null;
@@ -379,6 +379,132 @@ export const deleteApiKey = async (id: string): Promise<void> => {
 export const testApiKey = async (provider: string, apiKey: string): Promise<TestApiKeyResult> => {
   const response = await api.post<TestApiKeyResult>('/api/api-keys/test', { provider, apiKey });
   return response.data;
+};
+
+// ============================================
+// Characters
+// ============================================
+
+export interface CharacterAppearance {
+  physicalDescription: string;
+  visualSummary: string;
+  ageAppearance: string;
+  age: string;
+  height: string;
+  build: string;
+  bodyType: string;
+  bustSize: string;
+  shoulders: string;
+  hairColor: string;
+  hairStyle: string;
+  hairLength: string;
+  hairTexture: string;
+  eyeColor: string;
+  eyeShape: string;
+  eyebrows: string;
+  faceShape: string;
+  jawline: string;
+  cheekbones: string;
+  nose: string;
+  lips: string;
+  skinTone: string;
+  complexion: string;
+  ethnicity: string;
+  facialHair: string;
+  voice: string;
+  accent: string;
+  posture: string;
+  gait: string;
+  distinctiveFeatures: string[];
+  tattoos: string[];
+  piercings: string[];
+  accessories: string[];
+  typicalClothing: string;
+  clothingColors: string[];
+  overallStyle: string;
+}
+
+export interface Character {
+  id: string;
+  vividPageId: string;
+  name: string;
+  aliases: string[];
+  initialAppearance: CharacterAppearance;
+  referenceImagePath: string | null;
+  role: 'protagonist' | 'antagonist' | 'supporting' | 'minor';
+  firstAppearanceScene: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DiscoverCharactersResponse {
+  success: boolean;
+  message: string;
+  jobId: string;
+  vividPage: {
+    id: string;
+    status: string;
+    progressPercent: number;
+  };
+}
+
+export interface SimilarCharacter {
+  character: Character;
+  similarity: number;
+}
+
+/**
+ * Get all discovered characters for a VividPage
+ */
+export const getCharacters = async (vividPageId: string): Promise<Character[]> => {
+  const response = await api.get<{ success: boolean; characters: Character[] }>(
+    `/api/vividpages/${vividPageId}/characters`
+  );
+  return response.data.characters;
+};
+
+/**
+ * Trigger character discovery for a VividPage
+ */
+export const discoverCharacters = async (
+  vividPageId: string,
+  options?: { provider?: string; model?: string }
+): Promise<DiscoverCharactersResponse> => {
+  const response = await api.post<DiscoverCharactersResponse>(
+    `/api/vividpages/${vividPageId}/discover-characters`,
+    options
+  );
+  return response.data;
+};
+
+/**
+ * Regenerate embedding for a character
+ */
+export const regenerateCharacterEmbedding = async (
+  vividPageId: string,
+  characterId: string,
+  provider?: string
+): Promise<{ success: boolean; message: string }> => {
+  const response = await api.post(
+    `/api/vividpages/${vividPageId}/characters/${characterId}/regenerate-embedding`,
+    { provider }
+  );
+  return response.data;
+};
+
+/**
+ * Find similar characters using embeddings
+ */
+export const getSimilarCharacters = async (
+  vividPageId: string,
+  characterId: string,
+  limit?: number
+): Promise<SimilarCharacter[]> => {
+  const response = await api.get<{ success: boolean; similar: SimilarCharacter[] }>(
+    `/api/vividpages/${vividPageId}/characters/${characterId}/similar`,
+    { params: { limit } }
+  );
+  return response.data.similar;
 };
 
 // ============================================

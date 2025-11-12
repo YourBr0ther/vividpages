@@ -54,10 +54,14 @@ export default function Bookcase() {
     switch (status) {
       case 'completed':
       case 'scenes_detected':
+      case 'analyzed':
+      case 'characters_discovered':
         return 'bg-green-100 text-green-800 border-green-200';
       case 'uploading':
       case 'parsing':
       case 'analyzing':
+      case 'discovering_characters':
+      case 'building_character_profiles':
       case 'generating':
         return 'bg-blue-100 text-blue-800 border-blue-200';
       case 'failed':
@@ -77,6 +81,14 @@ export default function Bookcase() {
         return 'Ready';
       case 'analyzing':
         return 'Analyzing...';
+      case 'analyzed':
+        return 'Analyzed';
+      case 'discovering_characters':
+        return 'Discovering...';
+      case 'building_character_profiles':
+        return 'Building Profiles...';
+      case 'characters_discovered':
+        return 'Characters Found';
       case 'generating':
         return 'Generating...';
       case 'completed':
@@ -318,7 +330,12 @@ export default function Bookcase() {
                       </button>
                     )}
 
-                    {(vividPage.status === 'scenes_detected' || vividPage.status === 'analyzing' || vividPage.status === 'analyzed') && (
+                    {(vividPage.status === 'scenes_detected' ||
+                      vividPage.status === 'analyzing' ||
+                      vividPage.status === 'analyzed' ||
+                      vividPage.status === 'discovering_characters' ||
+                      vividPage.status === 'building_character_profiles' ||
+                      vividPage.status === 'characters_discovered') && (
                       <button
                         onClick={() => navigate(`/vividpages/${vividPage.id}`)}
                         className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition"

@@ -2,14 +2,43 @@ import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import { getVividPage, getVividPageScenes, triggerSceneAnalysis, Scene } from '../lib/api';
+import { getVividPage, getVividPageScenes, triggerSceneAnalysis, getCharacters, discoverCharacters, Scene, Character } from '../lib/api';
+import { useSocket } from '../lib/useSocket';
+
+type ViewTab = 'scenes' | 'characters';
 
 export default function VividPageViewer() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState<ViewTab>('scenes');
   const [selectedScene, setSelectedScene] = useState<Scene | null>(null);
+  const [selectedCharacter, setSelectedCharacter] = useState<Character | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isDiscoveringCharacters, setIsDiscoveringCharacters] = useState(false);
   const [sceneLimit, setSceneLimit] = useState<number>(5); // Default to 5 scenes for testing
+
+  // Real-time progress state
+  const [realtimeProgress, setRealtimeProgress] = useState<number | null>(null);
+  const [realtimeStep, setRealtimeStep] = useState<string | null>(null);
+
+  // Set up Socket.IO real-time updates
+  useSocket(id || null, {
+    onProgress: (data) => {
+      console.log('📊 Real-time progress:', data);
+      setRealtimeProgress(data.progressPercent);
+      setRealtimeStep(data.currentStep);
+      // Also refetch to keep data in sync
+      refetchVividPage();
+    },
+    onStatus: (data) => {
+      console.log('📡 Status update:', data);
+      refetchVividPage();
+      refetchScenes();
+      // Clear real-time progress when status changes
+      setRealtimeProgress(null);
+      setRealtimeStep(null);
+    },
+  });
 
   // Fetch VividPage details
   const { data: vividPage, refetch: refetchVividPage, isLoading: isLoadingVividPage } = useQuery({
@@ -17,10 +46,22 @@ export default function VividPageViewer() {
     queryFn: () => getVividPage(id!),
     enabled: !!id,
     refetchInterval: (data) => {
-      // Poll while analyzing
-      if (data?.status === 'analyzing') {
-        return 3000; // 3 seconds
+      // Poll frequently during active processing
+      if (data?.status === 'analyzing' ||
+          data?.status === 'discovering_characters' ||
+          data?.status === 'building_character_profiles') {
+        return 1000; // 1 second during active processing
       }
+
+      // Continue polling after processing completes to catch final updates
+      // This ensures UI updates even if WebSocket connection fails
+      if (data?.status === 'analyzed' ||
+          data?.status === 'characters_discovered' ||
+          data?.status === 'scenes_detected') {
+        return 3000; // 3 seconds during transitional states
+      }
+
+      // Stop polling for terminal states
       return false;
     },
   });
@@ -31,6 +72,17 @@ export default function VividPageViewer() {
     queryFn: () => getVividPageScenes(id!),
     enabled: !!id,
   });
+
+  // Fetch characters
+  const { data: characters = [], refetch: refetchCharacters, isLoading: isLoadingCharacters } = useQuery({
+    queryKey: ['characters', id],
+    queryFn: () => getCharacters(id!),
+    enabled: !!id && activeTab === 'characters',
+  });
+
+  // Use real-time progress if available, fallback to polled data
+  const displayProgress = realtimeProgress ?? vividPage?.progressPercent ?? 0;
+  const displayStep = realtimeStep ?? vividPage?.currentStep ?? '';
 
   const handleTriggerAnalysis = async () => {
     if (!id) return;
@@ -49,8 +101,35 @@ export default function VividPageViewer() {
     }
   };
 
+  const handleDiscoverCharacters = async () => {
+    if (!id) return;
+
+    try {
+      setIsDiscoveringCharacters(true);
+      await discoverCharacters(id);
+      toast.success('Character discovery started! This may take a few minutes.');
+      refetchVividPage();
+      // Switch to characters tab and refresh after a delay
+      setActiveTab('characters');
+      setTimeout(() => {
+        refetchCharacters();
+      }, 5000);
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to start character discovery';
+      toast.error(errorMessage);
+    } finally {
+      setIsDiscoveringCharacters(false);
+    }
+  };
+
   const handleSceneClick = (scene: Scene) => {
     setSelectedScene(scene);
+    setSelectedCharacter(null);
+  };
+
+  const handleCharacterClick = (character: Character) => {
+    setSelectedCharacter(character);
+    setSelectedScene(null);
   };
 
   const handleBack = () => {
@@ -175,9 +254,19 @@ export default function VividPageViewer() {
               <div className="bg-blue-50 border border-blue-200 rounded-lg px-6 py-3">
                 <div className="flex items-center gap-3">
                   <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
-                  <div>
-                    <div className="text-sm font-medium text-blue-900">Analyzing scenes...</div>
-                    <div className="text-xs text-blue-700">{vividPage.progressPercent}% complete</div>
+                  <div className="min-w-[250px] flex-1">
+                    <div className="text-sm font-medium text-blue-900 mb-1">Analyzing scenes...</div>
+                    <div className="text-xs text-blue-700 mb-1">{displayProgress}% complete</div>
+                    {displayStep && (
+                      <div className="text-xs text-blue-600 italic mb-2">{displayStep}</div>
+                    )}
+                    {/* Progress bar */}
+                    <div className="w-full bg-blue-100 rounded-full h-1.5">
+                      <div
+                        className="bg-blue-600 h-1.5 rounded-full transition-all duration-300"
+                        style={{ width: `${displayProgress}%` }}
+                      ></div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -185,47 +274,278 @@ export default function VividPageViewer() {
           </div>
         </div>
 
+        {/* Tab Navigation */}
+        <div className="mb-6">
+          <div className="border-b border-gray-200">
+            <nav className="-mb-px flex gap-8">
+              <button
+                onClick={() => {
+                  setActiveTab('scenes');
+                  setSelectedCharacter(null);
+                }}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition ${
+                  activeTab === 'scenes'
+                    ? 'border-indigo-600 text-indigo-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" />
+                  </svg>
+                  <span>Scenes</span>
+                  <span className="ml-2 py-0.5 px-2 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                    {scenes.length}
+                  </span>
+                </div>
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveTab('characters');
+                  setSelectedScene(null);
+                  refetchCharacters();
+                }}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition ${
+                  activeTab === 'characters'
+                    ? 'border-indigo-600 text-indigo-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                  </svg>
+                  <span>Characters</span>
+                  <span className="ml-2 py-0.5 px-2 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                    {vividPage?.totalCharacters || 0}
+                  </span>
+                </div>
+              </button>
+            </nav>
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Scene List */}
+          {/* Scene List / Character List */}
           <div className="lg:col-span-1">
             <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-6">
-              <h2 className="text-xl font-semibold text-gray-900 mb-4">Scenes</h2>
+              {activeTab === 'scenes' && (
+                <>
+                  <h2 className="text-xl font-semibold text-gray-900 mb-4">Scenes</h2>
+                  <div className="space-y-2 max-h-[calc(100vh-300px)] overflow-y-auto">
+                    {scenes.map((scene) => (
+                      <button
+                        key={scene.id}
+                        onClick={() => handleSceneClick(scene)}
+                        className={`w-full text-left p-3 rounded-lg border transition ${
+                          selectedScene?.id === scene.id
+                            ? 'bg-indigo-50 border-indigo-300'
+                            : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm font-medium text-gray-900">
+                            Scene {scene.sceneIndexGlobal + 1}
+                          </span>
+                          {scene.analysisStatus === 'completed' && (
+                            <svg className="w-4 h-4 text-green-600" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                            </svg>
+                          )}
+                          {scene.analysisStatus === 'processing' && (
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                          )}
+                        </div>
+                        <div className="text-xs text-gray-600 truncate">{scene.chapterTitle}</div>
+                        <div className="text-xs text-gray-500 mt-1">{scene.wordCount} words</div>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
 
-              <div className="space-y-2 max-h-[calc(100vh-300px)] overflow-y-auto">
-                {scenes.map((scene) => (
-                  <button
-                    key={scene.id}
-                    onClick={() => handleSceneClick(scene)}
-                    className={`w-full text-left p-3 rounded-lg border transition ${
-                      selectedScene?.id === scene.id
-                        ? 'bg-indigo-50 border-indigo-300'
-                        : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm font-medium text-gray-900">
-                        Scene {scene.sceneIndexGlobal + 1}
-                      </span>
-                      {scene.analysisStatus === 'completed' && (
-                        <svg className="w-4 h-4 text-green-600" fill="currentColor" viewBox="0 0 20 20">
-                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                        </svg>
-                      )}
-                      {scene.analysisStatus === 'processing' && (
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+              {activeTab === 'characters' && (
+                <>
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-xl font-semibold text-gray-900">Characters</h2>
+                    {vividPage?.status === 'analyzed' && (
+                      <button
+                        onClick={handleDiscoverCharacters}
+                        disabled={isDiscoveringCharacters}
+                        className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-lg hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isDiscoveringCharacters ? 'Starting...' : 'Discover'}
+                      </button>
+                    )}
+                  </div>
+
+                  {isLoadingCharacters ? (
+                    <div className="flex items-center justify-center py-12">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+                    </div>
+                  ) : characters.length === 0 ? (
+                    <div className="text-center py-12 text-gray-500">
+                      <svg className="w-16 h-16 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                      </svg>
+                      <p className="text-sm mb-2">No characters discovered yet</p>
+                      {vividPage?.status === 'analyzed' && (
+                        <p className="text-xs text-gray-400">Click "Discover" to analyze characters</p>
                       )}
                     </div>
-                    <div className="text-xs text-gray-600 truncate">{scene.chapterTitle}</div>
-                    <div className="text-xs text-gray-500 mt-1">{scene.wordCount} words</div>
-                  </button>
-                ))}
-              </div>
+                  ) : (
+                    <div className="space-y-2 max-h-[calc(100vh-300px)] overflow-y-auto">
+                      {characters.map((character) => (
+                        <button
+                          key={character.id}
+                          onClick={() => handleCharacterClick(character)}
+                          className={`w-full text-left p-3 rounded-lg border transition ${
+                            selectedCharacter?.id === character.id
+                              ? 'bg-indigo-50 border-indigo-300'
+                              : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center text-white font-semibold">
+                              {character.name.charAt(0)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-medium text-gray-900 truncate">{character.name}</div>
+                              <div className="text-xs text-gray-600 capitalize">{character.role}</div>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           </div>
 
-          {/* Scene Detail */}
+          {/* Scene Detail / Character Detail */}
           <div className="lg:col-span-2">
-            {selectedScene ? (
+            {selectedCharacter ? (
+              <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-8">
+                {/* Character Header */}
+                <div className="mb-6 pb-6 border-b border-gray-200">
+                  <div className="flex items-start gap-6">
+                    <div className="w-20 h-20 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center text-white text-3xl font-bold shadow-lg">
+                      {selectedCharacter.name.charAt(0)}
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3 mb-2">
+                        <h3 className="text-3xl font-bold text-gray-900">{selectedCharacter.name}</h3>
+                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                          selectedCharacter.role === 'protagonist'
+                            ? 'bg-purple-100 text-purple-800'
+                            : selectedCharacter.role === 'antagonist'
+                            ? 'bg-red-100 text-red-800'
+                            : selectedCharacter.role === 'supporting'
+                            ? 'bg-blue-100 text-blue-800'
+                            : 'bg-gray-100 text-gray-800'
+                        }`}>
+                          {selectedCharacter.role.toUpperCase()}
+                        </span>
+                      </div>
+                      {selectedCharacter.aliases.length > 0 && (
+                        <p className="text-sm text-gray-600">
+                          Also known as: {selectedCharacter.aliases.join(', ')}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Visual Summary */}
+                {selectedCharacter.initialAppearance.visualSummary && (
+                  <div className="mb-6">
+                    <h4 className="text-lg font-semibold text-gray-900 mb-3">Visual Summary</h4>
+                    <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
+                      <p className="text-gray-800">{selectedCharacter.initialAppearance.visualSummary}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Physical Description */}
+                {selectedCharacter.initialAppearance.physicalDescription && (
+                  <div className="mb-6">
+                    <h4 className="text-lg font-semibold text-gray-900 mb-3">Physical Description</h4>
+                    <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                      <p className="text-gray-700 leading-relaxed">{selectedCharacter.initialAppearance.physicalDescription}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Appearance Details Grid */}
+                <div className="mb-6">
+                  <h4 className="text-lg font-semibold text-gray-900 mb-3">Appearance Details</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                    {[
+                      { label: 'Age', value: selectedCharacter.initialAppearance.age },
+                      { label: 'Height', value: selectedCharacter.initialAppearance.height },
+                      { label: 'Build', value: selectedCharacter.initialAppearance.build },
+                      { label: 'Hair Color', value: selectedCharacter.initialAppearance.hairColor },
+                      { label: 'Hair Style', value: selectedCharacter.initialAppearance.hairStyle },
+                      { label: 'Eye Color', value: selectedCharacter.initialAppearance.eyeColor },
+                      { label: 'Skin Tone', value: selectedCharacter.initialAppearance.skinTone },
+                      { label: 'Complexion', value: selectedCharacter.initialAppearance.complexion },
+                      { label: 'Style', value: selectedCharacter.initialAppearance.overallStyle },
+                    ].filter(item => item.value && item.value !== 'not specified').map((item, idx) => (
+                      <div key={idx} className="bg-white border border-gray-200 rounded-lg p-3">
+                        <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">{item.label}</div>
+                        <div className="text-sm font-medium text-gray-900 capitalize">{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Distinctive Features */}
+                {selectedCharacter.initialAppearance.distinctiveFeatures.length > 0 && (
+                  <div className="mb-6">
+                    <h4 className="text-lg font-semibold text-gray-900 mb-3">Distinctive Features</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedCharacter.initialAppearance.distinctiveFeatures.map((feature, idx) => (
+                        <span
+                          key={idx}
+                          className="bg-purple-50 border border-purple-200 text-purple-800 text-sm font-medium px-4 py-2 rounded-full"
+                        >
+                          {feature}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Accessories */}
+                {selectedCharacter.initialAppearance.accessories.length > 0 && (
+                  <div className="mb-6">
+                    <h4 className="text-lg font-semibold text-gray-900 mb-3">Accessories</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedCharacter.initialAppearance.accessories.map((accessory, idx) => (
+                        <span
+                          key={idx}
+                          className="bg-amber-50 border border-amber-200 text-amber-800 text-sm font-medium px-4 py-2 rounded-full"
+                        >
+                          {accessory}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Typical Clothing */}
+                {selectedCharacter.initialAppearance.typicalClothing && selectedCharacter.initialAppearance.typicalClothing !== 'not specified' && (
+                  <div className="mb-6">
+                    <h4 className="text-lg font-semibold text-gray-900 mb-3">Typical Clothing</h4>
+                    <div className="bg-pink-50 border border-pink-200 rounded-lg p-4">
+                      <p className="text-gray-700">{selectedCharacter.initialAppearance.typicalClothing}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : selectedScene ? (
               <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-8">
                 {/* Scene Header */}
                 <div className="mb-6 pb-6 border-b border-gray-200">
@@ -388,9 +708,13 @@ export default function VividPageViewer() {
             ) : (
               <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-12 text-center">
                 <div className="text-6xl mb-4">👈</div>
-                <h3 className="text-xl font-semibold text-gray-900 mb-2">Select a scene</h3>
+                <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                  {activeTab === 'scenes' ? 'Select a scene' : 'Select a character'}
+                </h3>
                 <p className="text-gray-600">
-                  Click on any scene from the list to view its content and analysis
+                  {activeTab === 'scenes'
+                    ? 'Click on any scene from the list to view its content and analysis'
+                    : 'Click on any character from the list to view their detailed profile'}
                 </p>
               </div>
             )}

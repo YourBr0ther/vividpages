@@ -1,6 +1,6 @@
 import { db } from '../db/index.js';
 import { characters, characterEmbeddings, settings, settingEmbeddings, type Character, type Setting } from '../db/schema.js';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, inArray } from 'drizzle-orm';
 import { EmbeddingFactory, EmbeddingProvider } from './embedding/index.js';
 
 // ============================================
@@ -170,7 +170,7 @@ export async function generateCharacterEmbeddingsBatch(
 
   // Get all characters from database
   const characterList = await db.query.characters.findMany({
-    where: sql`${characters.id} = ANY(${characterIds})`,
+    where: inArray(characters.id, characterIds),
   });
 
   if (characterList.length === 0) {
