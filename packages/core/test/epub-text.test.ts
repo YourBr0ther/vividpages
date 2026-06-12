@@ -90,9 +90,76 @@ describe('extractChapterText (synthetic)', () => {
     expect(r.paragraphs).toHaveLength(2);
   });
 
-  it('keeps headings as ordinary paragraphs', () => {
-    const r = extractChapterText('<h1>Chapter 1</h1><h2>Part One</h2><p>Body text.</p>');
-    expect(r.text).toBe('Chapter 1\n\nPart One\n\nBody text.');
+  describe('leading embedded chapter headings', () => {
+    it('strips a leading h1+h2 run into leadingHeadings; text starts at the first real paragraph', () => {
+      const r = extractChapterText(
+        '<h1>Chapter 1</h1><h2>Evie</h2><p>First real paragraph.</p><p>Second.</p>',
+      );
+      expect(r.leadingHeadings).toEqual(['Chapter 1', 'Evie']);
+      expect(r.text).toBe('First real paragraph.\n\nSecond.');
+      expect(r.paragraphs.map((p) => r.text.slice(p.start, p.end))).toEqual([
+        'First real paragraph.',
+        'Second.',
+      ]);
+      assertInvariants(r);
+    });
+
+    it('keeps a mid-chapter heading in text (only the LEADING run is stripped)', () => {
+      const r = extractChapterText(
+        '<h1>Chapter 1</h1><p>One.</p><h2>Interlude</h2><p>Two.</p>',
+      );
+      expect(r.leadingHeadings).toEqual(['Chapter 1']);
+      expect(r.text).toBe('One.\n\nInterlude\n\nTwo.');
+      assertInvariants(r);
+    });
+
+    it('a doc that is ONLY headings (title-page fragment) yields empty text', () => {
+      const r = extractChapterText('<h1>Part One</h1><h2>The Beginning</h2>');
+      expect(r.leadingHeadings).toEqual(['Part One', 'The Beginning']);
+      expect(r.text).toBe('');
+      expect(r.paragraphs).toEqual([]);
+      expect(r.sceneBreaks).toEqual([]);
+    });
+
+    it('treats calibre heading-class paragraphs (chapter-title, pov) as heading-origin', () => {
+      const r = extractChapterText(
+        '<p class="body_chapter-title">Chapter 2</p><p class="body_pov">Evie</p><p>Real prose.</p>',
+      );
+      expect(r.leadingHeadings).toEqual(['Chapter 2', 'Evie']);
+      expect(r.text).toBe('Real prose.');
+      assertInvariants(r);
+    });
+
+    it('matches heading-class variants with numeric suffixes (body_chapter-title1)', () => {
+      const r = extractChapterText(
+        '<p class="body_chapter-title1">Epilogue</p><p>Real prose.</p>',
+      );
+      expect(r.leadingHeadings).toEqual(['Epilogue']);
+      expect(r.text).toBe('Real prose.');
+    });
+
+    it('does not misread unrelated classes (body_setting, povrety) as headings', () => {
+      const r = extractChapterText(
+        '<p class="body_setting">Once Upon a Time…</p><p class="povrety-note">Real text.</p>',
+      );
+      expect(r.leadingHeadings).toEqual([]);
+      expect(r.text).toBe('Once Upon a Time…\n\nReal text.');
+    });
+
+    it('drops a scene break that would land before the first kept paragraph', () => {
+      const r = extractChapterText('<h1>Chapter 1</h1><hr/><p>One.</p><p>Two.</p>');
+      expect(r.leadingHeadings).toEqual(['Chapter 1']);
+      expect(r.text).toBe('One.\n\nTwo.');
+      expect(r.sceneBreaks).toEqual([]);
+      assertInvariants(r);
+    });
+
+    it('keeps later scene breaks at valid (shifted) offsets', () => {
+      const r = extractChapterText('<h1>Chapter 1</h1><p>One.</p><hr/><p>Two.</p>');
+      expect(r.text).toBe('One.\n\nTwo.');
+      expect(r.sceneBreaks).toEqual(['One.\n\n'.length]);
+      assertInvariants(r);
+    });
   });
 
   it('treats blockquote and li as paragraphs', () => {
@@ -207,11 +274,17 @@ describe('extractChapterText (synthetic)', () => {
   });
 
   it('returns an empty result for empty/blank input', () => {
-    expect(extractChapterText('')).toEqual({ text: '', paragraphs: [], sceneBreaks: [] });
+    expect(extractChapterText('')).toEqual({
+      text: '',
+      paragraphs: [],
+      sceneBreaks: [],
+      leadingHeadings: [],
+    });
     expect(extractChapterText('<div>  </div>')).toEqual({
       text: '',
       paragraphs: [],
       sceneBreaks: [],
+      leadingHeadings: [],
     });
   });
 });
@@ -226,16 +299,21 @@ describe('extractChapterText (real fixture chapters)', () => {
     assertInvariants(r);
   });
 
-  it('chapter-early starts with the Prologue heading paragraph', () => {
+  it('chapter-early strips the Prologue heading into leadingHeadings; the setting line stays', () => {
     const r = extractChapterText(fixture('chapter-early.xhtml'));
+    // The fixture's heading is a <p class="body_chapter-title">, not an <h1>;
+    // the following <p class="body_setting"> is narrative and is kept.
+    expect(r.leadingHeadings).toEqual(['Prologue']);
     const first = r.text.slice(r.paragraphs[0]!.start, r.paragraphs[0]!.end);
-    expect(first).toBe('Prologue');
+    expect(first).toBe('Once Upon a Time…');
+    expect(r.text).not.toMatch(/^Prologue/);
     expect(r.text).toContain('It was an ordinary day when Evie met The Villain.');
   });
 
-  it('chapter-middle keeps the POV marker paragraph and curly punctuation', () => {
+  it('chapter-middle strips title + POV marker, keeps curly punctuation', () => {
     const r = extractChapterText(fixture('chapter-middle.xhtml'));
-    expect(r.text).toContain('The Villain');
+    expect(r.leadingHeadings).toEqual(['Chapter 29', 'The Villain']);
+    expect(r.text).toMatch(/^It was finally time\./);
     expect(r.text).toMatch(/[‘’“”—]/);
   });
 });

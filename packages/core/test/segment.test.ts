@@ -265,6 +265,8 @@ describe('segmentChapter (real book)', () => {
       expect(parsed.chapters.length).toBeGreaterThanOrEqual(58);
 
       let totalScenes = 0;
+      let totalWords = 0;
+      let strippedHeadings = 0;
       let chaptersWithExplicitBreaks = 0;
       const distribution = new Map<number, number>();
       const oversized: string[] = [];
@@ -273,6 +275,11 @@ describe('segmentChapter (real book)', () => {
         const text = extractChapterText(ch.html);
         expect(text.paragraphs.length).toBeGreaterThan(0);
         expect(text.text).not.toContain('<');
+        // Embedded chapter headings (title + POV marker) are stripped, so the
+        // text never re-starts with the ncx title ("Chapter 12", "Prologue"…).
+        if (ch.title) expect(text.text.startsWith(ch.title)).toBe(false);
+        strippedHeadings += text.leadingHeadings?.length ?? 0;
+        totalWords += text.text.split(/\s+/).filter(Boolean).length;
 
         const scenes = segmentChapter(text);
         expect(scenes.length).toBeGreaterThanOrEqual(1);
@@ -300,7 +307,8 @@ describe('segmentChapter (real book)', () => {
         .join(', ');
       console.log(
         `[segment] ${parsed.chapters.length} chapters -> ${totalScenes} scenes | ${dist} | ` +
-          `chapters with explicit break markers: ${chaptersWithExplicitBreaks} | oversized: ${oversized.length}`,
+          `chapters with explicit break markers: ${chaptersWithExplicitBreaks} | oversized: ${oversized.length} | ` +
+          `words: ${totalWords} | stripped leading headings: ${strippedHeadings}`,
       );
 
       // Sanity: roughly 1-4 scenes per chapter for this book.

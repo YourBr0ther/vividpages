@@ -14,6 +14,15 @@ export interface ChapterText {
    * are dropped silently; consecutive markers collapse into one break.
    */
   sceneBreaks: number[];
+  /**
+   * The leading run of heading-origin paragraphs (h1-h6, or calibre-style
+   * chapter-title/POV class hints) that precede the first real paragraph —
+   * e.g. ["Chapter 1", "Evie"]. These duplicate the toc title / POV marker,
+   * so they are dropped from `text` (offsets exclude them) and surfaced here.
+   * Headings appearing mid-chapter stay in `text` as ordinary paragraphs.
+   * Optional for compatibility with rows stored before this field existed.
+   */
+  leadingHeadings?: string[];
 }
 
 /** Block-level element names we recurse into looking for paragraph leaves. */
@@ -62,6 +71,20 @@ const DECORATION_RE = /^[*•⁂~\-—–◆#.…\s]{1,20}$/;
  */
 const BREAK_CLASS_RE = /(?:^|[\s_-])(?:scene-?break|section-?break|text-?break|tb)(?=[\s_-]|$)/i;
 
+/**
+ * Class hints that mark a paragraph as an embedded chapter heading. Calibre
+ * EPUBs often typeset chapter titles and POV markers as plain <p> elements
+ * with classes like "body_chapter-title" / "body_chapter-title1" / "body_pov"
+ * instead of h1-h6. Matched with the same token-delimiter discipline as
+ * BREAK_CLASS_RE (plus an optional numeric suffix) so e.g. "body_setting" or
+ * "povrety-note" do not match.
+ */
+const HEADING_CLASS_RE =
+  /(?:^|[\s_-])(?:chapter-?title\d*|chapter-?head(?:ing)?\d*|chapter-?number\d*|pov)(?=[\s_-]|$)/i;
+
+/** True for h1-h6 tag names. */
+const HEADING_TAG_RE = /^h[1-6]$/;
+
 /** Normalizes paragraph text: collapse whitespace runs, trim. Entities are
  * already decoded by cheerio; curly quotes and em-dashes are kept as-is. */
 function normalize(text: string): string {
@@ -77,6 +100,11 @@ function isDecorationOnly(text: string): boolean {
 function hasBreakClassHint(node: Cheerio<AnyNode>): boolean {
   const cls = node.attr('class');
   return cls != null && BREAK_CLASS_RE.test(cls);
+}
+
+function hasHeadingClassHint(node: Cheerio<AnyNode>): boolean {
+  const cls = node.attr('class');
+  return cls != null && HEADING_CLASS_RE.test(cls);
 }
 
 /**
@@ -112,16 +140,16 @@ function hasBlockChildren(node: Cheerio<AnyNode>): boolean {
 export function extractChapterText(html: string): ChapterText {
   const $ = cheerio.load(html);
 
-  const paragraphs: string[] = [];
+  const paragraphs: Array<{ text: string; heading: boolean }> = [];
   /** Paragraph indices that have an explicit break immediately before them. */
   const breakBeforePara = new Set<number>();
   let pendingBreak = false;
 
-  const pushParagraph = (text: string): void => {
+  const pushParagraph = (text: string, heading = false): void => {
     if (!text) return; // drop empty paragraphs
     if (pendingBreak && paragraphs.length > 0) breakBeforePara.add(paragraphs.length);
     pendingBreak = false;
-    paragraphs.push(text);
+    paragraphs.push({ text, heading });
   };
 
   const markBreak = (): void => {
@@ -147,7 +175,7 @@ export function extractChapterText(html: string): ChapterText {
     if (LEAF_TAGS.has(tag)) {
       const text = leafText(el);
       if (text && isDecorationOnly(text)) markBreak();
-      else pushParagraph(text);
+      else pushParagraph(text, HEADING_TAG_RE.test(tag) || hasHeadingClassHint(el));
       return;
     }
     if (tag === 'div' || tag === 'blockquote') {
@@ -158,7 +186,7 @@ export function extractChapterText(html: string): ChapterText {
       } else {
         const text = leafText(el);
         if (text && isDecorationOnly(text)) markBreak();
-        else pushParagraph(text);
+        else pushParagraph(text, hasHeadingClassHint(el));
       }
       return;
     }
@@ -175,17 +203,26 @@ export function extractChapterText(html: string): ChapterText {
     .toArray()
     .forEach(visit);
 
-  // Assemble text + offsets: paragraphs joined by exactly '\n\n'.
+  // Strip the leading run of heading-origin paragraphs (chapter title, POV
+  // marker, …) before the first real paragraph; mid-chapter headings stay.
+  let lead = 0;
+  while (lead < paragraphs.length && paragraphs[lead]!.heading) lead += 1;
+  const leadingHeadings = paragraphs.slice(0, lead).map((p) => p.text);
+  const kept = paragraphs.slice(lead);
+
+  // Assemble text + offsets: paragraphs joined by exactly '\n\n'. A break
+  // recorded before the first KEPT paragraph is dropped (a scene break at
+  // offset 0 is meaningless), matching the leading-break rule above.
   let text = '';
   const offsets: ChapterText['paragraphs'] = [];
   const sceneBreaks: number[] = [];
-  paragraphs.forEach((p, i) => {
+  kept.forEach((p, i) => {
     if (i > 0) text += '\n\n';
     const start = text.length;
-    text += p;
+    text += p.text;
     offsets.push({ start, end: text.length });
-    if (breakBeforePara.has(i)) sceneBreaks.push(start);
+    if (i > 0 && breakBeforePara.has(i + lead)) sceneBreaks.push(start);
   });
 
-  return { text, paragraphs: offsets, sceneBreaks };
+  return { text, paragraphs: offsets, sceneBreaks, leadingHeadings };
 }

@@ -91,6 +91,11 @@ export async function runIngest({ bookId, runId }: StageJobPayload): Promise<voi
   let bookWordCount = 0;
   const rows: (typeof chapters.$inferInsert)[] = [];
   for (const [i, chapter] of parsed.chapters.entries()) {
+    // Leading embedded headings (chapter title / POV marker) are stripped by
+    // extractChapterText; we store the clean text and discard the headings
+    // (the ncx title on the row already covers them). A chapter that is ONLY
+    // headings (title-page fragment) still gets a row with empty text — the
+    // segment stage's segmentChapter() returns [] for it, so no scenes.
     const extracted = extractChapterText(chapter.html);
     const wordCount = countWords(extracted.text);
     bookWordCount += wordCount;
