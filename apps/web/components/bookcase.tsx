@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useMemo, useState } from 'react';
 
 import { toBookCardData, type BookCardData, type BookLike } from '@/lib/book-card-data';
+import { MAX_UPLOAD_BYTES } from '@/lib/upload-limits';
 
 import { BookCard, UploadingBookCard } from './book-card';
 import { ConfirmDialog } from './confirm-dialog';
@@ -48,6 +49,10 @@ export function Bookcase({ initialBooks }: { initialBooks: BookCardData[] }) {
   async function handleFile(file: File) {
     if (!file.name.toLowerCase().endsWith('.epub')) {
       pushToast('error', 'Only .epub files can join the shelf.');
+      return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      pushToast('error', 'That book is over the 100 MB limit — try a smaller EPUB.');
       return;
     }
     const key = crypto.randomUUID();

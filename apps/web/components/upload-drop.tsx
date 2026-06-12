@@ -89,20 +89,24 @@ export function UploadDrop({
   }
 
   return (
-    <button
-      type="button"
-      onClick={() => inputRef.current?.click()}
-      {...dragHandlers}
-      className={`flex aspect-[2/3] flex-col items-center justify-center gap-3 rounded-[3px] border border-dashed px-3 text-center transition-colors ${
-        dragOver
-          ? 'border-ember-400/70 bg-ember-400/5 text-ember-300'
-          : 'border-stone-700/70 bg-stone-900/30 text-stone-500 hover:border-ember-400/50 hover:text-ember-300/90'
-      }`}
-    >
+    // The hidden input lives outside the button: <input> is not valid inside
+    // <button>, and display:none keeps it from becoming a grid item.
+    <>
       {input}
-      <BookPlusIcon className="h-7 w-7" />
-      <span className="text-xs font-medium uppercase tracking-[0.2em]">Add a book</span>
-      <span className="text-[10px] text-stone-600">drop an .epub</span>
-    </button>
+      <button
+        type="button"
+        onClick={() => inputRef.current?.click()}
+        {...dragHandlers}
+        className={`flex aspect-[2/3] flex-col items-center justify-center gap-3 rounded-[3px] border border-dashed px-3 text-center transition-colors ${
+          dragOver
+            ? 'border-ember-400/70 bg-ember-400/5 text-ember-300'
+            : 'border-stone-700/70 bg-stone-900/30 text-stone-500 hover:border-ember-400/50 hover:text-ember-300/90'
+        }`}
+      >
+        <BookPlusIcon className="h-7 w-7" />
+        <span className="text-xs font-medium uppercase tracking-[0.2em]">Add a book</span>
+        <span className="text-[10px] text-stone-600">drop an .epub</span>
+      </button>
+    </>
   );
 }

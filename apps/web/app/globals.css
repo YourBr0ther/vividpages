@@ -1,7 +1,7 @@
 @import 'tailwindcss';
 
 @theme {
-  /* Wired to next/font variables set on <body> in app/layout.tsx. */
+  /* Wired to next/font variables set on <html> in app/layout.tsx. */
   --font-sans: var(--font-albert-sans), ui-sans-serif, system-ui, sans-serif;
   --font-display: var(--font-fraunces), Georgia, 'Times New Roman', serif;
 

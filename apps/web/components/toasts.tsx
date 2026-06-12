@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export interface Toast {
   id: number;
@@ -9,21 +9,40 @@ export interface Toast {
 }
 
 const TOAST_MS = 5000;
+const MAX_TOASTS = 3;
 
 /** Lightweight toast state — no library, just a capped list with timed dismissal. */
 export function useToasts() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const nextId = useRef(0);
+  const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+
+  // Clear any pending dismissal timers when the owning component unmounts.
+  useEffect(() => {
+    const pending = timers.current;
+    return () => {
+      for (const timer of pending.values()) clearTimeout(timer);
+      pending.clear();
+    };
+  }, []);
 
   const dismissToast = useCallback((id: number) => {
+    const timer = timers.current.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      timers.current.delete(id);
+    }
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
 
   const pushToast = useCallback(
     (tone: Toast['tone'], message: string) => {
       const id = ++nextId.current;
-      setToasts((current) => [...current.slice(-3), { id, tone, message }]);
-      setTimeout(() => dismissToast(id), TOAST_MS);
+      setToasts((current) => [...current, { id, tone, message }].slice(-MAX_TOASTS));
+      timers.current.set(
+        id,
+        setTimeout(() => dismissToast(id), TOAST_MS),
+      );
     },
     [dismissToast],
   );

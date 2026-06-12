@@ -1,11 +1,16 @@
 'use client';
 
-import { useEffect, useId } from 'react';
+import { useEffect, useId, useRef } from 'react';
+
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
  * Minimal accessible confirm dialog. Rendered only while open (mount it
  * conditionally); Escape and a backdrop click cancel; the cancel button takes
  * initial focus so Enter doesn't accidentally confirm a destructive action.
+ * Tab/Shift+Tab are trapped inside the dialog, and focus returns to the
+ * previously-focused element when it unmounts.
  */
 export function ConfirmDialog({
   title,
@@ -23,10 +28,49 @@ export function ConfirmDialog({
   onCancel: () => void;
 }) {
   const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  // Capture whatever opened the dialog, move focus to Cancel (so Enter can't
+  // accidentally confirm), and restore focus to the opener on unmount.
+  useEffect(() => {
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    cancelRef.current?.focus();
+    return () => previouslyFocused?.focus();
+  }, []);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') onCancel();
+      if (event.key === 'Escape') {
+        onCancel();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      // Manual focus trap: cycle Tab/Shift+Tab within the dialog.
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+      );
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) {
+        event.preventDefault();
+        return;
+      }
+      const active = document.activeElement;
+
+      if (event.shiftKey) {
+        if (active === first || !dialog.contains(active)) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !dialog.contains(active)) {
+        event.preventDefault();
+        first.focus();
+      }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -40,6 +84,7 @@ export function ConfirmDialog({
         aria-hidden
       />
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -52,7 +97,7 @@ export function ConfirmDialog({
         <div className="mt-6 flex justify-end gap-3">
           <button
             type="button"
-            autoFocus
+            ref={cancelRef}
             onClick={onCancel}
             disabled={busy}
             className="rounded-full border border-stone-700 px-4 py-1.5 text-sm text-stone-300 transition hover:bg-stone-800 disabled:opacity-60"

@@ -64,15 +64,26 @@ export async function GET(request: Request, { params }: RouteContext) {
 
   const bookId = book.id;
 
+  // Shared with the stream's cancel() handler so a dropped connection stops
+  // the polling/heartbeat timers immediately.
+  let close = () => {};
+
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      // Client may already be gone by the time the stream starts (auth +
+      // ownership lookups above are async) — don't begin polling at all.
+      if (request.signal.aborted) {
+        controller.close();
+        return;
+      }
+
       let pollTimer: ReturnType<typeof setInterval> | undefined;
       let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
       let closed = false;
       let polling = false;
       let lastPayload = '';
 
-      const close = () => {
+      close = () => {
         if (closed) return;
         closed = true;
         clearInterval(pollTimer);
@@ -127,13 +138,17 @@ export async function GET(request: Request, { params }: RouteContext) {
       heartbeatTimer = setInterval(() => send(': ping\n\n'), HEARTBEAT_MS);
       void poll(); // Initial snapshot, emitted immediately.
     },
+    // Runtime signals the consumer went away (dropped connection): stop
+    // polling right away instead of waiting for the next failed write.
+    cancel() {
+      close();
+    },
   });
 
   return new Response(stream, {
     headers: {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     },
   });

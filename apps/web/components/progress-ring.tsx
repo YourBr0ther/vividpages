@@ -19,6 +19,7 @@ export function ProgressRing({
   return (
     <div
       role="progressbar"
+      aria-label="Processing progress"
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={indeterminate ? undefined : Math.round(clamped)}

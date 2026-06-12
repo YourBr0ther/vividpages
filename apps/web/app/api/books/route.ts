@@ -9,8 +9,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { auth } from '@/auth';
 import { isUniqueViolation } from '@/lib/db-errors';
 import { listBooksWithLatestRun } from '@/lib/queries';
-
-const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
+import { MAX_UPLOAD_BYTES } from '@/lib/upload-limits';
 
 /**
  * POST /api/books — upload an EPUB (multipart field 'file') and kick off the
