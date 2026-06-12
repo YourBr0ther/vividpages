@@ -225,8 +225,22 @@ function clampRole(
   return role;
 }
 
-/** Empty / placeholder trait strings from the LLM are normalized to null. */
-const NULLISH_TRAITS = new Set(['', 'null', 'none', 'unknown', 'n/a', 'not described']);
+/**
+ * Empty / placeholder trait strings from the LLM are normalized to null.
+ * Includes hint-echo placeholders the model copies back out of the prompt
+ * ('typical default outfit') instead of leaving the field null.
+ */
+const NULLISH_TRAITS = new Set([
+  '',
+  'null',
+  'none',
+  'unknown',
+  'n/a',
+  'not described',
+  'not specified',
+  'default outfit',
+  'typical default outfit',
+]);
 
 function normalizeProfile(profile: CharacterProfile): CharacterProfile {
   const clean = (v: string | null): string | null => {
@@ -427,9 +441,15 @@ export async function runProfiles(payload: ProfilesJobPayload): Promise<void> {
       }
       const alive = new Set(survivors.map((s) => s.id));
 
+      // Not extracted as a pure function: each merge feeds back into the next
+      // decision (mergeCharacters recounts the survivor's sceneCount from the
+      // DB, and the inversion guard compares live counts), so a pure
+      // pre-computation of (kept, absorbed) pairs could diverge from what the
+      // sequential merges actually produce.
       for (const merge of result.value.merges) {
-        const target = byKey.get(nameKey(merge.keep));
-        if (!target || !alive.has(target.id)) continue;
+        const initialTarget = byKey.get(nameKey(merge.keep));
+        if (!initialTarget || !alive.has(initialTarget.id)) continue;
+        let target: SurvivorCharacter = initialTarget;
         for (const absorbName of merge.absorb) {
           const dupe = byKey.get(nameKey(absorbName));
           if (!dupe || dupe.id === target.id || !alive.has(dupe.id)) continue;
@@ -444,6 +464,10 @@ export async function runProfiles(payload: ProfilesJobPayload): Promise<void> {
           for (const n of [absorbed.name, ...absorbed.aliases]) byKey.set(nameKey(n), kept);
           mergeLog.push({ kept: kept.name, absorbed: absorbed.name, via: 'llm' });
           log(`merged '${absorbed.name}' -> '${kept.name}' (via llm)`);
+          // An inverted merge deletes the row `target` pointed at; later
+          // absorbs in this group must merge into the survivor, never reuse
+          // the dead row.
+          target = kept;
         }
       }
       for (let i = survivors.length - 1; i >= 0; i--) {
@@ -509,9 +533,12 @@ export async function runProfiles(payload: ProfilesJobPayload): Promise<void> {
         failures++;
         log(`profile for '${s.name}' failed: ${(err as Error).message}`);
       }
-    } else {
+    } else if (!s.hasProfile) {
       // Sub-threshold characters get no LLM call: role 'minor' and a token
       // compiled from the name plus the single best description delta.
+      // Characters that already carry a full profile (they can drop below
+      // the significance threshold when merges shrink the cast) keep their
+      // richer role/profile/token — a delta-only token is always a downgrade.
       const delta =
         (mentionsByChar.get(s.id) ?? [])
           .map((m) => m.descriptionDelta?.trim())
