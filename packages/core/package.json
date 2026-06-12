@@ -13,7 +13,8 @@
     "./queues": "./src/queues.ts",
     "./pipeline/*": "./src/pipeline/*.ts",
     "./analysis/*": "./src/analysis/*.ts",
-    "./characters/*": "./src/characters/*.ts"
+    "./characters/*": "./src/characters/*.ts",
+    "./imaging/*": "./src/imaging/*.ts"
   },
   "scripts": {
     "test": "vitest run"
