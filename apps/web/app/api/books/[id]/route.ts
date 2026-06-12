@@ -1,22 +1,10 @@
 import { deleteObject, type Bucket } from '@vividpages/core/storage';
 import { books, chapters, getDb, pipelineRuns, scenes } from '@vividpages/db';
-import { and, count, desc, eq } from 'drizzle-orm';
+import { count, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 
 import { auth } from '@/auth';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Loads the book only if it belongs to the user; non-UUID ids short-circuit
- * to "not found" instead of throwing a Postgres cast error.
- */
-async function findOwnedBook(id: string, userId: string) {
-  if (!UUID_RE.test(id)) return undefined;
-  return getDb().query.books.findFirst({
-    where: and(eq(books.id, id), eq(books.userId, userId)),
-  });
-}
+import { findOwnedBook } from '@/lib/find-owned-book';
 
 type RouteContext = { params: Promise<{ id: string }> };
 
