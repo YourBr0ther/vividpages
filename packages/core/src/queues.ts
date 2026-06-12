@@ -20,6 +20,12 @@ export interface StageJobPayload {
   runId: string;
 }
 
+/** Profiles can be forced to recompute already-profiled characters. */
+export interface ProfilesJobPayload extends StageJobPayload {
+  /** Re-run LLM profiling even for characters that already have a profile. */
+  force?: boolean;
+}
+
 /** Imagine can optionally target a single subject (regeneration). */
 export interface ImagineJobPayload extends StageJobPayload {
   only?: {
@@ -33,7 +39,7 @@ export interface QueuePayloads {
   ingest: StageJobPayload;
   segment: StageJobPayload;
   analyze: StageJobPayload;
-  profiles: StageJobPayload;
+  profiles: ProfilesJobPayload;
   imagine: ImagineJobPayload;
 }
 

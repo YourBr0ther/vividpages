@@ -1,10 +1,4 @@
-import {
-  OllamaError,
-  OllamaLLM,
-  StructuredOutputError,
-  completeStructured,
-  type LLM,
-} from '@vividpages/ai';
+import { OllamaError, StructuredOutputError, completeStructured, type LLM } from '@vividpages/ai';
 import {
   books,
   chapters,
@@ -12,21 +6,16 @@ import {
   getDb,
   sceneCharacters,
   scenes,
-  userSettings,
   type Db,
 } from '@vividpages/db';
-import { and, asc, eq, isNotNull, sql } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, notInArray, sql } from 'drizzle-orm';
 
 import { buildSceneAnalysisPrompt, type RosterEntry } from '../analysis/prompt';
 import { candidateNames, findRosterMatch, splitCompoundName } from '../analysis/roster';
 import { sceneAnalysisSchema, type SceneAnalysis } from '../analysis/schema';
-import { getEnv } from '../env';
 import { getQueue, type StageJobPayload } from '../queues';
+import { resolveLlm } from './llm';
 import { incrementRunTokens, reportProgress, setBookStatus } from './progress';
-
-/** Fallbacks when neither the book nor the owner's settings pin an LLM. */
-const DEFAULT_LLM_PROVIDER = 'ollama';
-const DEFAULT_LLM_MODEL = 'llama3.1:8b';
 
 /** OllamaError codes that indicate the whole stage cannot succeed. */
 const SYSTEMIC_OLLAMA_CODES = new Set(['NETWORK', 'TIMEOUT', 'MODEL_NOT_FOUND']);
@@ -39,26 +28,6 @@ const EARLY_FAILURE_WINDOW = 10;
 
 interface CharacterRosterEntry extends RosterEntry {
   id: string;
-}
-
-/**
- * Resolves the LLM for a book: book columns -> owner's user_settings -> env
- * defaults. Only Ollama is wired up here; cloud providers arrive in M6 (T27).
- */
-async function resolveLlm(db: Db, book: { userId: string; llmProvider: string | null; llmModel: string | null }): Promise<OllamaLLM> {
-  const settings = await db.query.userSettings.findFirst({
-    where: eq(userSettings.userId, book.userId),
-  });
-  const provider = book.llmProvider ?? settings?.llmProvider ?? DEFAULT_LLM_PROVIDER;
-  const model = book.llmModel ?? settings?.llmModel ?? DEFAULT_LLM_MODEL;
-  if (provider !== 'ollama') {
-    throw new Error(
-      `analyze: LLM provider '${provider}' is not yet supported for scene analysis — ` +
-        `only 'ollama' is wired up (anthropic/openai land in M6).`,
-    );
-  }
-  const baseUrl = settings?.ollamaUrl || getEnv().OLLAMA_URL;
-  return new OllamaLLM({ baseUrl, model });
 }
 
 /**
@@ -113,6 +82,10 @@ async function loadRoster(db: Db, bookId: string): Promise<CharacterRosterEntry[
  * All writes for the scene run in one transaction so a crash can never leave
  * a partial scene behind (e.g. a scene_characters link inserted but its
  * character's sceneCount not yet incremented, which would undercount forever).
+ *
+ * The shared in-memory roster is only mutated AFTER the transaction commits:
+ * a rollback must not leave phantom roster entries (whose ids no longer
+ * exist) or description updates behind for subsequent scenes to match on.
  */
 async function persistSceneAnalysis(
   db: Db,
@@ -125,7 +98,16 @@ async function persistSceneAnalysis(
 ): Promise<void> {
   const { bookId, sceneId, analysis, roster } = args;
 
+  // Staged roster mutations, applied only on successful commit.
+  const newEntries: CharacterRosterEntry[] = [];
+  const descUpdates = new Map<CharacterRosterEntry, string>();
+
   await db.transaction(async (tx) => {
+    // Re-analysis can resolve differently (or the tx may be retried); start
+    // each attempt with clean staging so nothing leaks between attempts.
+    newEntries.length = 0;
+    descUpdates.clear();
+
     const linkedCharacterIds = new Set<string>();
     for (const reported of analysis.characters) {
       // 'Trystan (The Villain)' should match either 'Trystan' or 'The Villain'.
@@ -135,7 +117,9 @@ async function persistSceneAnalysis(
 
       let entry: CharacterRosterEntry | undefined;
       for (const candidate of names) {
-        entry = findRosterMatch(roster, candidate);
+        // Same-scene repeats must also match entries created in THIS tx,
+        // which are not yet visible in the shared roster.
+        entry = findRosterMatch(roster, candidate) ?? findRosterMatch(newEntries, candidate);
         if (entry) break;
       }
       if (!entry) {
@@ -148,7 +132,7 @@ async function persistSceneAnalysis(
           .values({ bookId, name, aliases, sceneCount: 0 })
           .returning({ id: characters.id });
         entry = { id: inserted[0]!.id, name, aliases, oneLineDesc: null };
-        roster.push(entry);
+        newEntries.push(entry);
       }
       // The model occasionally lists the same person twice under different
       // epithets; the first mention wins for this scene.
@@ -185,9 +169,30 @@ async function persistSceneAnalysis(
           .set({ sceneCount: sql`${characters.sceneCount} + 1` })
           .where(eq(characters.id, entry.id));
       }
-      if (entry.oneLineDesc === null && descriptionDelta) {
-        entry.oneLineDesc = descriptionDelta;
+      if (entry.oneLineDesc === null && !descUpdates.has(entry) && descriptionDelta) {
+        descUpdates.set(entry, descriptionDelta);
       }
+    }
+
+    // Re-analysis convergence: drop links from a previous analysis of this
+    // scene whose characters the new analysis no longer reports, decrementing
+    // their sceneCount so the counts keep matching the links.
+    const staleLinks = await tx
+      .delete(sceneCharacters)
+      .where(
+        linkedCharacterIds.size > 0
+          ? and(
+              eq(sceneCharacters.sceneId, sceneId),
+              notInArray(sceneCharacters.characterId, [...linkedCharacterIds]),
+            )
+          : eq(sceneCharacters.sceneId, sceneId),
+      )
+      .returning({ characterId: sceneCharacters.characterId });
+    for (const stale of staleLinks) {
+      await tx
+        .update(characters)
+        .set({ sceneCount: sql`greatest(${characters.sceneCount} - 1, 0)` })
+        .where(eq(characters.id, stale.characterId));
     }
 
     await tx
@@ -203,6 +208,12 @@ async function persistSceneAnalysis(
       })
       .where(eq(scenes.id, sceneId));
   });
+
+  // Commit succeeded: publish staged mutations to the shared roster.
+  roster.push(...newEntries);
+  for (const [entry, desc] of descUpdates) {
+    if (entry.oneLineDesc === null) entry.oneLineDesc = desc;
+  }
 }
 
 /**

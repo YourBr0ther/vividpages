@@ -28,6 +28,7 @@ import {
 import { runAnalyze } from '@vividpages/core/pipeline/analyze';
 import { runIngest } from '@vividpages/core/pipeline/ingest';
 import { failRun, setBookStatus } from '@vividpages/core/pipeline/progress';
+import { runProfiles } from '@vividpages/core/pipeline/profiles';
 import { runSegment } from '@vividpages/core/pipeline/segment';
 import { closeDb } from '@vividpages/db';
 
@@ -44,11 +45,12 @@ const concurrency: Record<QueueName, number> = {
   imagine: env.WORKER_CONCURRENCY_IMAGINE,
 };
 
-// Real pipeline stages; profiles/imagine remain stubs until M4-T21/M5.
+// Real pipeline stages; imagine remains a stub until M5.
 const stageFns: Partial<Record<QueueName, (payload: StageJobPayload) => Promise<void>>> = {
   ingest: runIngest,
   segment: runSegment,
   analyze: runAnalyze,
+  profiles: runProfiles,
 };
 
 const workers: Worker[] = (Object.keys(QUEUE) as QueueName[]).map((name) => {
@@ -63,7 +65,9 @@ const workers: Worker[] = (Object.keys(QUEUE) as QueueName[]).map((name) => {
         return;
       }
       try {
-        await stageFn({ bookId, runId });
+        // Pass the whole payload through so stage-specific flags (e.g.
+        // profiles' `force`) survive the dispatch.
+        await stageFn(job.data);
       } catch (err) {
         // Mark the run/book failed on EVERY attempt (not just the last):
         // BullMQ will still retry the job. On retry, the stage function's
