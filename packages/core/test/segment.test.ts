@@ -122,8 +122,8 @@ describe('segmentChapter', () => {
   it('cannot split an oversized segment made of one giant paragraph even amid others', () => {
     const input = chapter([para(100), para(2500), para(100)], [1, 2]);
     const scenes = segmentChapter(input);
-    // Hard cuts isolate the giant paragraph; outer fragments are tiny and merge
-    // into the previous scene where one exists.
+    // Hard cuts isolate the giant paragraph; the 100-word neighbors are above
+    // minHardSegmentWords (50) so they stay separate scenes.
     expect(scenes.length).toBeLessThanOrEqual(3);
     expect(Math.max(...scenes.map((s) => s.wordCount))).toBeGreaterThanOrEqual(2500);
     assertInvariants(input, scenes);
@@ -175,6 +175,54 @@ describe('segmentChapter', () => {
     const scenes = segmentChapter(input, { targetWords: 100, maxWords: 150, minTailWords: 10 });
     expect(scenes).toHaveLength(2);
     expect(scenes.map((s) => s.wordCount)).toEqual([100, 100]);
+    assertInvariants(input, scenes);
+  });
+
+  it('matches real transition cues at a word boundary (Later that day / Meanwhile, back at)', () => {
+    for (const prefix of ['Later that day', 'Meanwhile, back at']) {
+      const paras = Array.from({ length: 10 }, (_, i) => (i === 7 ? para(20, prefix) : para(20)));
+      const input = chapter(paras);
+      const scenes = segmentChapter(input, { targetWords: 100, maxWords: 150, minTailWords: 10 });
+      expect(scenes).toHaveLength(2);
+      expect(sceneText(input, scenes[1]!).startsWith(prefix)).toBe(true);
+      expect(scenes.map((s) => s.wordCount)).toEqual([140, 60]);
+      assertInvariants(input, scenes);
+    }
+  });
+
+  it('does not treat words merely starting with a cue as cues (Lateral / Meanwhiles / By the timepiece)', () => {
+    for (const prefix of ['Lateral movement drills', 'Meanwhiles abound here', 'By the timepiece tower']) {
+      const paras = Array.from({ length: 10 }, (_, i) => (i === 7 ? para(20, prefix) : para(20)));
+      const input = chapter(paras);
+      const scenes = segmentChapter(input, { targetWords: 100, maxWords: 150, minTailWords: 10 });
+      expect(scenes.map((s) => s.wordCount)).toEqual([100, 100]);
+      assertInvariants(input, scenes);
+    }
+  });
+
+  it('keeps a short-but-real scene after an explicit break separate (>= minHardSegmentWords)', () => {
+    // 100-word epilogue-style scene after '***': author-intended, stays its own scene
+    // even though it is under minTailWords (150).
+    const input = chapter([para(500), para(500), para(100)], [2]);
+    const scenes = segmentChapter(input);
+    expect(scenes).toHaveLength(2);
+    expect(scenes.map((s) => s.wordCount)).toEqual([1000, 100]);
+    assertInvariants(input, scenes);
+  });
+
+  it('still merges a sub-minHardSegmentWords fragment after an explicit break', () => {
+    const input = chapter([para(500), para(500), para(30)], [2]);
+    const scenes = segmentChapter(input);
+    expect(scenes).toHaveLength(1);
+    expect(scenes[0]!.wordCount).toBe(1030);
+    assertInvariants(input, scenes);
+  });
+
+  it('honors a custom minHardSegmentWords', () => {
+    const input = chapter([para(500), para(500), para(100)], [2]);
+    const scenes = segmentChapter(input, { minHardSegmentWords: 120 });
+    expect(scenes).toHaveLength(1);
+    expect(scenes[0]!.wordCount).toBe(1100);
     assertInvariants(input, scenes);
   });
 

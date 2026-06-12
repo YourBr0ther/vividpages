@@ -48,7 +48,9 @@ const BLOCK_TAGS = new Set([...CONTAINER_TAGS, ...LEAF_TAGS, 'hr', 'pre']);
 
 /**
  * Decoration-only paragraph: asterisms, bullets, dashes, tildes, dots,
- * ellipses etc. — no letters or digits, at least one non-space, short.
+ * ellipses etc. — no letters or digits, short. The literal '.' is included
+ * because many books typeset asterism substitutes out of plain periods,
+ * e.g. ". . ." or "...".
  */
 const DECORATION_RE = /^[*•⁂~\-—–◆#.…\s]{1,20}$/;
 
@@ -66,8 +68,10 @@ function normalize(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
+/** Callers pass normalize()d text and check truthiness first, so the input is
+ * always non-empty and trimmed (contains a non-space char) — no /\S/ guard. */
 function isDecorationOnly(text: string): boolean {
-  return DECORATION_RE.test(text) && /\S/.test(text);
+  return DECORATION_RE.test(text);
 }
 
 function hasBreakClassHint(node: Cheerio<AnyNode>): boolean {
@@ -102,6 +106,8 @@ function hasBlockChildren(node: Cheerio<AnyNode>): boolean {
  *   that directly contain text rather than other blocks.
  * - Scene breaks: <hr>, decoration-only paragraphs (***, • • •, …, etc.) and
  *   elements whose class hints a break (scene-break, tb, section-break, …).
+ *   A break-hinted element with real content keeps that content; the break
+ *   lands before its first kept paragraph.
  */
 export function extractChapterText(html: string): ChapterText {
   const $ = cheerio.load(html);
@@ -131,10 +137,13 @@ export function extractChapterText(html: string): ChapterText {
       markBreak();
       return;
     }
-    if (hasBreakClassHint(el)) {
-      markBreak();
-      return;
-    }
+    // A break-class hint marks a scene boundary but never swallows content:
+    // processing falls through, so a hinted container's paragraphs — and a
+    // hinted <p>'s real prose — are kept, with the break recorded before the
+    // first kept paragraph (documented choice). Marker-only hinted elements
+    // (empty, or decoration-only like "***") contribute no paragraph and thus
+    // act as pure breaks, exactly as before.
+    if (hasBreakClassHint(el)) markBreak();
     if (LEAF_TAGS.has(tag)) {
       const text = leafText(el);
       if (text && isDecorationOnly(text)) markBreak();

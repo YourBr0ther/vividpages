@@ -7,6 +7,13 @@ export interface SegmentOptions {
   maxWords?: number;
   /** Final fragments below this merge into the previous scene. Default 150. */
   minTailWords?: number;
+  /**
+   * A whole hard-cut (explicit-break) segment below this merges into the
+   * previous scene across the break. Deliberately lower than minTailWords:
+   * an author-intended short scene after '***' (e.g. a 100-word epilogue)
+   * stays separate; only marker noise / stray fragments merge. Default 50.
+   */
+  minHardSegmentWords?: number;
 }
 
 export interface SceneSpan {
@@ -18,14 +25,19 @@ export interface SceneSpan {
   wordCount: number;
 }
 
-const DEFAULTS = { targetWords: 1200, maxWords: 1800, minTailWords: 150 } as const;
+const DEFAULTS = {
+  targetWords: 1200,
+  maxWords: 1800,
+  minTailWords: 150,
+  minHardSegmentWords: 50,
+} as const;
 
 /**
  * Paragraphs starting with a narrative transition cue make better scene
  * openings, so word-count splits prefer them near the target boundary.
  */
 const TRANSITION_CUE_RE =
-  /^(later|that (night|evening|morning|afternoon)|the next (morning|day|night|week)|meanwhile|hours later|by the time|when (he|she|they) (woke|returned|arrived))/i;
+  /^(later|that (night|evening|morning|afternoon)|the next (morning|day|night|week)|meanwhile|hours later|by the time|when (he|she|they) (woke|returned|arrived))\b/i;
 
 /** How far (in paragraphs) a transition cue may pull a cut from the nearest boundary. */
 const CUE_WINDOW = 3;
@@ -63,18 +75,19 @@ function sum(words: number[], start: number, end: number): number {
  * 2. Split oversized segments greedily at paragraph boundaries near
  *    multiples of targetWords, preferring transition-cue paragraphs within
  *    ±CUE_WINDOW paragraphs (a cue never pushes a piece over maxWords).
- * 3. Merge tails under minTailWords into the previous scene — including
- *    whole hard-cut segments: a tiny fragment between explicit breaks merges
- *    into the preceding scene rather than standing alone, so consecutive
- *    tiny break-separated fragments collapse together. (A tiny FIRST segment
- *    has no predecessor and stays separate.)
+ * 3. Merge tails under minTailWords into the previous scene. Whole hard-cut
+ *    segments merge across their explicit break only when under the separate
+ *    minHardSegmentWords threshold (default 50) — explicit breaks signal
+ *    author intent, so a short-but-real scene (e.g. a 100-word epilogue
+ *    after '***') stays separate while marker noise still collapses. (A tiny
+ *    FIRST segment has no predecessor and stays separate.)
  *
  * Scenes cover every paragraph exactly once, in order, without overlap. A
  * single paragraph longer than maxWords cannot be split and is allowed
  * through as one oversized scene.
  */
 export function segmentChapter(input: ChapterText, opts?: SegmentOptions): SceneSpan[] {
-  const { targetWords, maxWords, minTailWords } = { ...DEFAULTS, ...opts };
+  const { targetWords, maxWords, minTailWords, minHardSegmentWords } = { ...DEFAULTS, ...opts };
   const { paragraphs, text, sceneBreaks } = input;
   if (paragraphs.length === 0) return [];
 
@@ -104,9 +117,11 @@ export function segmentChapter(input: ChapterText, opts?: SegmentOptions): Scene
   for (const segment of hardSegments) {
     const segmentWords = sum(stats.words, segment.start, segment.end);
 
-    // A hard-cut segment below minTailWords merges into the previous scene
-    // (even across the explicit break) when one exists.
-    if (segmentWords < minTailWords && scenes.length > 0) {
+    // A hard-cut segment below minHardSegmentWords merges into the previous
+    // scene (even across the explicit break) when one exists. This threshold
+    // is intentionally lower than minTailWords: explicit breaks are author
+    // intent, so short-but-real scenes survive.
+    if (segmentWords < minHardSegmentWords && scenes.length > 0) {
       scenes[scenes.length - 1]!.end = segment.end;
       continue;
     }

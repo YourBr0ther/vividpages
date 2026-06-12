@@ -141,6 +141,36 @@ describe('extractChapterText (synthetic)', () => {
       },
     );
 
+    it('keeps paragraphs inside a break-hinted CONTAINER, recording the break before its first paragraph (documented choice)', () => {
+      const r = extractChapterText(
+        '<p>Before.</p><div class="tb"><p>Scene text.</p><p>More text.</p></div><p>After.</p>',
+      );
+      expect(r.text).toBe('Before.\n\nScene text.\n\nMore text.\n\nAfter.');
+      expect(r.sceneBreaks).toEqual(['Before.\n\n'.length]);
+      assertInvariants(r);
+    });
+
+    it('break-hinted empty div still acts as a pure break', () => {
+      const r = extractChapterText('<p>One.</p><div class="scene-break"></div><p>Two.</p>');
+      expect(r.text).toBe('One.\n\nTwo.');
+      expect(r.sceneBreaks).toEqual(['One.\n\n'.length]);
+    });
+
+    it('break-hinted <p> with a decoration marker still acts as a pure break', () => {
+      const r = extractChapterText('<p>One.</p><p class="scene-break">***</p><p>Two.</p>');
+      expect(r.text).toBe('One.\n\nTwo.');
+      expect(r.sceneBreaks).toEqual(['One.\n\n'.length]);
+    });
+
+    it('keeps real prose in a break-hinted <p>, recording the break before it (documented choice)', () => {
+      const r = extractChapterText(
+        '<p>One.</p><p class="scene-break">Real prose.</p><p>Two.</p>',
+      );
+      expect(r.text).toBe('One.\n\nReal prose.\n\nTwo.');
+      expect(r.sceneBreaks).toEqual(['One.\n\n'.length]);
+      assertInvariants(r);
+    });
+
     it('does not misread unrelated classes (e.g. "tbody", "table") as break hints', () => {
       const r = extractChapterText(
         '<p>One.</p><p class="tbody-note">Real text.</p><p class="stable">More.</p>',
