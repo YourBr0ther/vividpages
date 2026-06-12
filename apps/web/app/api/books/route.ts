@@ -3,11 +3,12 @@ import { createHash } from 'node:crypto';
 import { getQueue } from '@vividpages/core/queues';
 import { putObject } from '@vividpages/core/storage';
 import { books, getDb, pipelineRuns } from '@vividpages/db';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { auth } from '@/auth';
 import { isUniqueViolation } from '@/lib/db-errors';
+import { listBooksWithLatestRun } from '@/lib/queries';
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
 
@@ -146,31 +147,5 @@ export async function GET() {
     return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
   }
 
-  const db = getDb();
-  const rows = await db.query.books.findMany({
-    where: eq(books.userId, userId),
-    orderBy: desc(books.createdAt),
-  });
-
-  const latestRunByBook = new Map<string, typeof pipelineRuns.$inferSelect>();
-  if (rows.length > 0) {
-    const runs = await db
-      .select()
-      .from(pipelineRuns)
-      .where(
-        inArray(
-          pipelineRuns.bookId,
-          rows.map((b) => b.id),
-        ),
-      )
-      .orderBy(desc(pipelineRuns.startedAt));
-    // Rows arrive newest-first, so the first run seen per book is the latest.
-    for (const run of runs) {
-      if (!latestRunByBook.has(run.bookId)) latestRunByBook.set(run.bookId, run);
-    }
-  }
-
-  return NextResponse.json({
-    books: rows.map((book) => ({ ...book, latestRun: latestRunByBook.get(book.id) ?? null })),
-  });
+  return NextResponse.json({ books: await listBooksWithLatestRun(userId) });
 }

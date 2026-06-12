@@ -8,3 +8,6 @@ dist/
 next-env.d.ts
 *.tsbuildinfo
 packages/core/test/fixtures/
+
+# Playwright MCP artifacts
+.playwright-mcp/
