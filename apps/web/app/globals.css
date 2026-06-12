@@ -250,7 +250,9 @@
   .reader-surface {
     scroll-behavior: auto !important;
   }
-  .animate-slide-in {
+  .animate-slide-in,
+  .animate-toast-in,
+  .animate-rise {
     animation: none !important;
   }
 }

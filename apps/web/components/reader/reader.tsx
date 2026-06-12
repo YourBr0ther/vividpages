@@ -25,6 +25,9 @@ const SHOW_IMAGE_SLOTS = false;
 /** Debounce for persisting the reading position. */
 const SAVE_DELAY_MS = 2000;
 
+/** How long the "Resumed where you left off" notice stays up. */
+const RESUMED_TOAST_MS = 3000;
+
 interface ChapterRef {
   idx: number;
   title: string | null;
@@ -67,6 +70,13 @@ export function Reader({
   const [size, setSize] = useState<ReaderFontSize>('m');
   const [chromeHidden, setChromeHidden] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Quiet notice when the saved position landed mid-chapter (resuming to a
+  // chapter's start is indistinguishable from just opening it — stay silent).
+  const [resumedNotice, setResumedNotice] = useState(
+    () =>
+      initialSceneGlobalIdx != null &&
+      initialSceneGlobalIdx !== initialChapter.scenes[0]?.globalIdx,
+  );
 
   const surfaceRef = useRef<HTMLDivElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -259,6 +269,13 @@ export function Reader({
   useEffect(() => {
     surfaceRef.current?.focus({ preventScroll: true });
   }, []);
+
+  // Auto-dismiss the resumed notice.
+  useEffect(() => {
+    if (!resumedNotice) return;
+    const timer = setTimeout(() => setResumedNotice(false), RESUMED_TOAST_MS);
+    return () => clearTimeout(timer);
+  }, [resumedNotice]);
 
   // ---- Topmost-visible-scene tracking (IntersectionObserver) --------------
 
@@ -490,6 +507,17 @@ export function Reader({
           </nav>
         </article>
       </main>
+
+      {resumedNotice ? (
+        // animate-fade-in is opacity-only, so this stays reduced-motion safe.
+        <div
+          role="status"
+          className="reader-pop pointer-events-none fixed bottom-6 left-1/2 z-30 -translate-x-1/2 animate-fade-in rounded-full px-5 py-2.5 font-sans text-sm"
+          style={{ color: 'var(--reader-muted)' }}
+        >
+          Resumed where you left off
+        </div>
+      ) : null}
 
       {loadError != null ? (
         <div

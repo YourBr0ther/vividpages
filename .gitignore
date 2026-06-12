@@ -11,3 +11,7 @@ packages/core/test/fixtures/
 
 # Playwright MCP artifacts
 .playwright-mcp/
+
+# Playwright e2e output
+test-results/
+playwright-report/

@@ -6,12 +6,17 @@ import type { ChapterMeta, ChapterPayload, SceneRef } from './reader-types';
 export type BookRow = typeof books.$inferSelect;
 export type PipelineRunRow = typeof pipelineRuns.$inferSelect;
 
-export type BookWithLatestRun = BookRow & { latestRun: PipelineRunRow | null };
+export type BookWithLatestRun = BookRow & {
+  latestRun: PipelineRunRow | null;
+  /** The user's saved reading position, or null when they haven't started. */
+  progress: { chapterIdx: number; sceneGlobalIdx: number } | null;
+};
 
 /**
  * The user's books, newest first, each with its latest pipeline run (or
- * null). Shared by GET /api/books and the Bookcase server component so both
- * return the same shape without a server-side fetch round-trip.
+ * null) and the user's reading progress (or null). Shared by GET /api/books
+ * and the Bookcase server component so both return the same shape without a
+ * server-side fetch round-trip.
  */
 export async function listBooksWithLatestRun(userId: string): Promise<BookWithLatestRun[]> {
   const db = getDb();
@@ -21,24 +26,40 @@ export async function listBooksWithLatestRun(userId: string): Promise<BookWithLa
   });
 
   const latestRunByBook = new Map<string, PipelineRunRow>();
+  const progressByBook = new Map<string, { chapterIdx: number; sceneGlobalIdx: number }>();
   if (rows.length > 0) {
-    const runs = await db
-      .select()
-      .from(pipelineRuns)
-      .where(
-        inArray(
-          pipelineRuns.bookId,
-          rows.map((b) => b.id),
+    const bookIds = rows.map((b) => b.id);
+    const [runs, progressRows] = await Promise.all([
+      db
+        .select()
+        .from(pipelineRuns)
+        .where(inArray(pipelineRuns.bookId, bookIds))
+        .orderBy(desc(pipelineRuns.startedAt)),
+      db
+        .select({
+          bookId: readingProgress.bookId,
+          chapterIdx: readingProgress.chapterIdx,
+          sceneGlobalIdx: readingProgress.sceneGlobalIdx,
+        })
+        .from(readingProgress)
+        .where(
+          and(eq(readingProgress.userId, userId), inArray(readingProgress.bookId, bookIds)),
         ),
-      )
-      .orderBy(desc(pipelineRuns.startedAt));
-    // Rows arrive newest-first, so the first run seen per book is the latest.
+    ]);
+    // Runs arrive newest-first, so the first run seen per book is the latest.
     for (const run of runs) {
       if (!latestRunByBook.has(run.bookId)) latestRunByBook.set(run.bookId, run);
     }
+    for (const { bookId, ...position } of progressRows) {
+      progressByBook.set(bookId, position);
+    }
   }
 
-  return rows.map((book) => ({ ...book, latestRun: latestRunByBook.get(book.id) ?? null }));
+  return rows.map((book) => ({
+    ...book,
+    latestRun: latestRunByBook.get(book.id) ?? null,
+    progress: progressByBook.get(book.id) ?? null,
+  }));
 }
 
 /**

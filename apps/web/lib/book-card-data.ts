@@ -13,6 +13,8 @@ export interface BookCardData {
   status: BookStatus;
   error: string | null;
   hasCover: boolean;
+  /** 0-based chapter index of the saved reading position, or null. */
+  continueChapterIdx: number | null;
   latestRun: {
     stage: string;
     status: PipelineRunStatus;
@@ -30,6 +32,7 @@ export interface BookLike {
   status: BookStatus;
   error: string | null;
   coverObjectKey: string | null;
+  progress?: { chapterIdx: number } | null;
   latestRun?: {
     stage: string;
     status: PipelineRunStatus;
@@ -47,6 +50,7 @@ export function toBookCardData(book: BookLike): BookCardData {
     status: book.status,
     error: book.error,
     hasCover: Boolean(book.coverObjectKey),
+    continueChapterIdx: book.progress?.chapterIdx ?? null,
     latestRun: book.latestRun
       ? {
           stage: book.latestRun.stage,

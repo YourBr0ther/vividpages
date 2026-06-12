@@ -129,6 +129,7 @@ export function BookCard({
       {ready ? (
         <Link
           href={`/books/${book.id}`}
+          aria-label={`Open “${book.title}”`}
           className="block rounded-[4px] outline-none focus-visible:ring-2 focus-visible:ring-ember-400/70 focus-visible:ring-offset-4 focus-visible:ring-offset-stone-950"
         >
           {cover}
@@ -142,6 +143,15 @@ export function BookCard({
           {book.title}
         </h3>
         <p className="mt-1 line-clamp-1 text-xs text-stone-500">{book.author ?? '—'}</p>
+        {ready && book.continueChapterIdx != null ? (
+          <Link
+            href={`/books/${book.id}/read`}
+            className="mt-1.5 inline-flex items-center gap-1 rounded-sm text-[11px] font-medium text-parchment/60 outline-none transition hover:text-ember-300 focus-visible:ring-2 focus-visible:ring-ember-400/70"
+          >
+            Continue · Ch {book.continueChapterIdx + 1}
+            <span aria-hidden>→</span>
+          </Link>
+        ) : null}
       </div>
 
       <button
