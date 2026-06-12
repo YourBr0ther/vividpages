@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./env": "./src/env.ts",
+    "./epub/parse": "./src/epub/parse.ts",
     "./storage": "./src/storage.ts",
     "./queues": "./src/queues.ts"
   },
