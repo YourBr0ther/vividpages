@@ -1,9 +1,9 @@
 import { chapters, getDb, scenes } from '@vividpages/db';
 import { asc, eq } from 'drizzle-orm';
 
-import type { StageJobPayload } from '../queues';
+import { getQueue, type StageJobPayload } from '../queues';
 import { segmentChapter } from '../segment';
-import { completeRun, reportProgress, setBookStatus } from './progress';
+import { reportProgress, setBookStatus } from './progress';
 
 const INSERT_CHUNK_SIZE = 100;
 
@@ -78,8 +78,9 @@ export async function runSegment({ bookId, runId }: StageJobPayload): Promise<vo
     await db.insert(scenes).values(chunk);
   }
 
-  // M2 ends the pipeline here. M4: enqueue analyze instead and set status
-  // 'analyzing' (and do not completeRun yet).
-  await setBookStatus(bookId, 'ready');
-  await completeRun(runId);
+  // Hand off to the analyze stage. For now analysis always runs; a
+  // skip-analysis option (straight to 'ready') could be added later.
+  await setBookStatus(bookId, 'analyzing');
+  await reportProgress(runId, { stage: 'segment', percent: 100, currentStep: 'Queued for analysis' });
+  await getQueue('analyze').add('analyze', { bookId, runId });
 }

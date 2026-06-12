@@ -1,5 +1,5 @@
 import { books, getDb, pipelineRuns, type BookStatus } from '@vividpages/db';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 /**
  * Progress bookkeeping for pipeline stages. All helpers write to Postgres;
@@ -34,6 +34,22 @@ export async function completeRun(runId: string): Promise<void> {
   await getDb()
     .update(pipelineRuns)
     .set({ status: 'done', percent: 100, error: null })
+    .where(eq(pipelineRuns.id, runId));
+}
+
+/** Atomically adds LLM token usage onto a run's running totals. */
+export async function incrementRunTokens(
+  runId: string,
+  tokensIn: number,
+  tokensOut: number,
+): Promise<void> {
+  if (tokensIn === 0 && tokensOut === 0) return;
+  await getDb()
+    .update(pipelineRuns)
+    .set({
+      tokensIn: sql`${pipelineRuns.tokensIn} + ${tokensIn}`,
+      tokensOut: sql`${pipelineRuns.tokensOut} + ${tokensOut}`,
+    })
     .where(eq(pipelineRuns.id, runId));
 }
 

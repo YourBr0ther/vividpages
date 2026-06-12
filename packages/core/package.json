@@ -11,7 +11,8 @@
     "./segment": "./src/segment.ts",
     "./storage": "./src/storage.ts",
     "./queues": "./src/queues.ts",
-    "./pipeline/*": "./src/pipeline/*.ts"
+    "./pipeline/*": "./src/pipeline/*.ts",
+    "./analysis/*": "./src/analysis/*.ts"
   },
   "scripts": {
     "test": "vitest run"
@@ -19,6 +20,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.0.0",
     "@aws-sdk/s3-request-presigner": "^3.0.0",
+    "@vividpages/ai": "workspace:*",
     "@vividpages/db": "workspace:*",
     "drizzle-orm": "^0.44.0",
     "bullmq": "^5.0.0",

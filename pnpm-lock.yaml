@@ -116,6 +116,9 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: ^3.0.0
         version: 3.1067.0
+      '@vividpages/ai':
+        specifier: workspace:*
+        version: link:../ai
       '@vividpages/db':
         specifier: workspace:*
         version: link:../db
