@@ -18,7 +18,17 @@ export default {
   trustHost: true, // self-hosted behind Traefik; host header is trusted there
   session: { strategy: 'jwt' }, // Credentials provider cannot use DB sessions
   pages: { signIn: '/login' },
-  providers: googleEnabled ? [Google] : [],
+  providers: googleEnabled
+    ? [
+        // Pass the credentials explicitly so the provider reads the same env
+        // vars as the `googleEnabled` gate above (the bare `Google` provider
+        // would auto-read AUTH_GOOGLE_ID/AUTH_GOOGLE_SECRET instead).
+        Google({
+          clientId: process.env.GOOGLE_CLIENT_ID,
+          clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        }),
+      ]
+    : [],
   callbacks: {
     authorized({ auth }) {
       // Used by middleware: unauthenticated requests get redirected to /login.
@@ -26,6 +36,7 @@ export default {
     },
     jwt({ token, user }) {
       // `user` is only present at sign-in; persist id + role on the token.
+      // Note: role is frozen into the JWT until the user signs in again.
       if (user) {
         token.id = user.id;
         token.role = user.role ?? 'user';
@@ -33,7 +44,10 @@ export default {
       return token;
     },
     session({ session, token }) {
-      if (token.id) session.user.id = token.id;
+      // The jwt callback always sets these at sign-in; a missing id means a
+      // malformed token, so fail loudly instead of returning a partial session.
+      if (!token.id) throw new Error('JWT is missing user id');
+      session.user.id = token.id;
       if (token.role) session.user.role = token.role;
       return session;
     },

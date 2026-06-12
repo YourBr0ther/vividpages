@@ -4,8 +4,7 @@ import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
-const inputClass =
-  'w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 placeholder-stone-500 outline-none focus:border-amber-500';
+import { inputClass } from '../form-styles';
 
 export function RegisterForm() {
   const router = useRouter();
@@ -17,39 +16,48 @@ export function RegisterForm() {
     setError(null);
     setPending(true);
 
-    const form = new FormData(event.currentTarget);
-    const email = String(form.get('email') ?? '');
-    const password = String(form.get('password') ?? '');
-    const name = String(form.get('name') ?? '').trim();
+    // Stay pending on the successful navigation paths; only re-enable the
+    // button when registration failed or threw (e.g. network failure).
+    let navigating = false;
+    try {
+      const form = new FormData(event.currentTarget);
+      const email = String(form.get('email') ?? '');
+      const password = String(form.get('password') ?? '');
+      const name = String(form.get('name') ?? '').trim();
 
-    const res = await fetch('/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, name: name || undefined }),
-    });
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, name: name || undefined }),
+      });
 
-    if (!res.ok) {
-      const data = (await res.json().catch(() => null)) as {
-        error?: string;
-      } | null;
-      setError(data?.error ?? 'Registration failed. Please try again.');
-      setPending(false);
-      return;
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        setError(data?.error ?? 'Registration failed. Please try again.');
+        return;
+      }
+
+      // Account created — sign in with the same credentials.
+      const result = await signIn('credentials', {
+        email,
+        password,
+        redirect: false,
+      });
+      navigating = true;
+      if (result?.error) {
+        // Unlikely, but fall back to the login page rather than crashing.
+        router.push('/login');
+        return;
+      }
+      router.push('/');
+      router.refresh();
+    } catch {
+      setError('Something went wrong. Please try again.');
+    } finally {
+      if (!navigating) setPending(false);
     }
-
-    // Account created — sign in with the same credentials.
-    const result = await signIn('credentials', {
-      email,
-      password,
-      redirect: false,
-    });
-    if (result?.error) {
-      // Unlikely, but fall back to the login page rather than crashing.
-      router.push('/login');
-      return;
-    }
-    router.push('/');
-    router.refresh();
   }
 
   return (

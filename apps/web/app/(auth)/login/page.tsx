@@ -12,9 +12,13 @@ export default async function LoginPage({
   searchParams: Promise<{ callbackUrl?: string }>;
 }) {
   const { callbackUrl } = await searchParams;
-  // Only allow same-origin relative paths to prevent open redirects.
+  // Only allow same-origin relative paths to prevent open redirects. Reject
+  // '//' (protocol-relative) and '/\' (browsers normalize the backslash, so
+  // '/\evil.com' becomes '//evil.com').
   const safeCallbackUrl =
-    callbackUrl?.startsWith('/') && !callbackUrl.startsWith('//')
+    callbackUrl?.startsWith('/') &&
+    !callbackUrl.startsWith('//') &&
+    !callbackUrl.startsWith('/\\')
       ? callbackUrl
       : '/';
 

@@ -4,8 +4,7 @@ import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
-const inputClass =
-  'w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 placeholder-stone-500 outline-none focus:border-amber-500';
+import { inputClass } from '../form-styles';
 
 export function LoginForm({
   callbackUrl,
@@ -22,19 +21,28 @@ export function LoginForm({
     event.preventDefault();
     setError(null);
     setPending(true);
-    const form = new FormData(event.currentTarget);
-    const result = await signIn('credentials', {
-      email: form.get('email'),
-      password: form.get('password'),
-      redirect: false,
-    });
-    if (result?.error) {
-      setError('Invalid email or password.');
-      setPending(false);
-      return;
+    // Stay pending on the successful navigation path; only re-enable the
+    // button when sign-in failed or threw (e.g. network failure).
+    let navigating = false;
+    try {
+      const form = new FormData(event.currentTarget);
+      const result = await signIn('credentials', {
+        email: form.get('email'),
+        password: form.get('password'),
+        redirect: false,
+      });
+      if (result?.error) {
+        setError('Invalid email or password.');
+        return;
+      }
+      navigating = true;
+      router.push(callbackUrl);
+      router.refresh();
+    } catch {
+      setError('Something went wrong. Please try again.');
+    } finally {
+      if (!navigating) setPending(false);
     }
-    router.push(callbackUrl);
-    router.refresh();
   }
 
   return (

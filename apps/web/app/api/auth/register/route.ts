@@ -4,44 +4,26 @@ import { eq } from 'drizzle-orm';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
+import { ARGON2_OPTIONS } from '@/lib/password';
+import { createFixedWindowLimiter } from '@/lib/rate-limit';
+
 const registerSchema = z.object({
-  email: z.string().trim().email().max(254),
+  email: z.email().max(254),
   password: z.string().min(8).max(256),
   name: z.string().trim().min(1).max(120).optional(),
 });
 
-// --- Rate limiting -----------------------------------------------------------
-// Simple in-memory token bucket: 5 registration attempts per 15 minutes per IP.
-// NOTE: this state is per-replica (and resets on restart) — good enough for a
-// self-hosted single-instance deployment; replace with a shared store (Redis)
-// if the web app is ever scaled horizontally.
-const WINDOW_MS = 15 * 60 * 1000;
-const MAX_ATTEMPTS = 5;
-const buckets = new Map<string, { count: number; resetAt: number }>();
-
-function rateLimited(ip: string): boolean {
-  const now = Date.now();
-  // Opportunistic cleanup so the map doesn't grow unboundedly.
-  if (buckets.size > 10_000) {
-    for (const [key, bucket] of buckets) {
-      if (bucket.resetAt <= now) buckets.delete(key);
-    }
-  }
-  const bucket = buckets.get(ip);
-  if (!bucket || bucket.resetAt <= now) {
-    buckets.set(ip, { count: 1, resetAt: now + WINDOW_MS });
-    return false;
-  }
-  bucket.count += 1;
-  return bucket.count > MAX_ATTEMPTS;
-}
-
-// -----------------------------------------------------------------------------
+// 5 registration attempts per 15 minutes per IP (in-memory, per replica).
+const registerLimiter = createFixedWindowLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+});
 
 export async function POST(request: NextRequest) {
+  // x-forwarded-for is trusted because Traefik fronts the app and sets it.
   const ip =
     request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-  if (rateLimited(ip)) {
+  if (registerLimiter.hit(ip)) {
     return NextResponse.json(
       { error: 'Too many registration attempts. Try again later.' },
       { status: 429 },
@@ -58,7 +40,10 @@ export async function POST(request: NextRequest) {
   const parsed = registerSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: 'Invalid input.', issues: parsed.error.flatten().fieldErrors },
+      {
+        error: 'Invalid input.',
+        issues: z.flattenError(parsed.error).fieldErrors,
+      },
       { status: 400 },
     );
   }
@@ -77,7 +62,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const passwordHash = await hash(parsed.data.password);
+  const passwordHash = await hash(parsed.data.password, ARGON2_OPTIONS);
 
   try {
     const user = await db.transaction(async (tx) => {

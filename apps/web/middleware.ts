@@ -13,6 +13,12 @@ export default auth;
 export const config = {
   // Protect everything except: auth API routes, the health check, the login
   // and register pages, Next internals, and static files (anything with an
-  // extension, e.g. favicon.ico, icons, manifest).
-  matcher: ['/((?!api/auth|api/health|login|register|_next|.*\\..*).*)'],
+  // extension, e.g. favicon.ico, icons, manifest). Exclusions are end-bounded
+  // ($ or a trailing /) so future routes like /api/authors, /api/healthcheck
+  // or /registration are NOT accidentally excluded.
+  // Note: the dotted-path static exclusion means a dynamic route containing a
+  // dot in its path would also bypass middleware.
+  matcher: [
+    '/((?!api/auth(?:/|$)|api/health$|login$|register$|_next(?:/|$)|.*\\..*).*)',
+  ],
 };
