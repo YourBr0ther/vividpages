@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import type { CompleteOptions, LLM, LLMCompletion } from '../src/llm/types';
-import { completeStructured, StructuredOutputError } from '../src/structured';
+import { completeStructured, extractJsonText, StructuredOutputError } from '../src/structured';
 
 interface ScriptedResponse {
   text: string;
@@ -38,6 +38,40 @@ class FakeLLM implements LLM {
 const animalSchema = z.object({
   animal: z.string(),
   legs: z.number(),
+});
+
+describe('extractJsonText', () => {
+  it('returns bare JSON unchanged', () => {
+    expect(extractJsonText('{"a":1}')).toBe('{"a":1}');
+  });
+
+  it('strips a simple fenced block', () => {
+    expect(extractJsonText('```json\n{"a":1}\n```')).toBe('{"a":1}');
+  });
+
+  it('handles a fenced block whose JSON contains a nested code fence in a string', () => {
+    const inner = '{"code":"```js\\nx\\n```","a":1}';
+    const text = extractJsonText('```json\n' + inner + '\n```');
+    expect(JSON.parse(text)).toEqual({ code: '```js\nx\n```', a: 1 });
+  });
+
+  it('extracts JSON when prose before it contains braces', () => {
+    const raw = 'Per the shape {name, legs} you asked for: {"animal":"spider","legs":8}';
+    expect(JSON.parse(extractJsonText(raw))).toEqual({ animal: 'spider', legs: 8 });
+  });
+
+  it('extracts JSON wrapped in prose on both sides', () => {
+    const raw = 'Sure! {"animal":"spider","legs":8} Hope that helps.';
+    expect(JSON.parse(extractJsonText(raw))).toEqual({ animal: 'spider', legs: 8 });
+  });
+
+  it('falls back to the widest brace span when nothing parses', () => {
+    expect(extractJsonText('junk {not json} junk')).toBe('{not json}');
+  });
+
+  it('returns the raw text when there are no braces at all', () => {
+    expect(extractJsonText('no json here')).toBe('no json here');
+  });
 });
 
 describe('completeStructured', () => {
@@ -176,6 +210,57 @@ describe('completeStructured', () => {
     expect(soe.lastErrors).toBeTruthy();
     expect(JSON.stringify(soe.lastErrors)).toContain('legs');
     expect(llm.calls).toHaveLength(2);
+  });
+
+  it('clamps maxAttempts to at least 1', async () => {
+    const llm = new FakeLLM([{ text: 'not json' }]);
+    const err = await completeStructured(llm, {
+      prompt: 'Describe a spider',
+      schema: animalSchema,
+      maxAttempts: 0,
+    }).then(
+      () => {
+        throw new Error('expected rejection');
+      },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(StructuredOutputError);
+    expect((err as StructuredOutputError).attempts).toBe(1);
+    expect(llm.calls).toHaveLength(1);
+  });
+
+  it('truncates a huge previous response in the repair prompt', async () => {
+    const huge = `prefix ${'x'.repeat(10_000)} suffix`;
+    const llm = new FakeLLM([{ text: huge }, { text: '{"animal":"spider","legs":8}' }]);
+    await completeStructured(llm, {
+      prompt: 'Describe a spider',
+      schema: animalSchema,
+    });
+    const repair = llm.calls[1]!.prompt;
+    expect(repair).not.toContain(huge);
+    expect(repair).toContain('[... truncated');
+    // The repair prompt stays bounded (~base prompt + 2k excerpt).
+    expect(repair.length).toBeLessThan(4_000);
+  });
+
+  it('truncates lastText in the StructuredOutputError message but keeps it whole on the property', async () => {
+    const huge = '['.repeat(10_000);
+    const llm = new FakeLLM([{ text: huge }]);
+    const err = await completeStructured(llm, {
+      prompt: 'Describe a spider',
+      schema: animalSchema,
+      maxAttempts: 1,
+    }).then(
+      () => {
+        throw new Error('expected rejection');
+      },
+      (e: unknown) => e,
+    );
+    const soe = err as StructuredOutputError;
+    expect(soe).toBeInstanceOf(StructuredOutputError);
+    expect(soe.lastText).toBe(huge);
+    expect(soe.message).toContain('[... truncated');
+    expect(soe.message.length).toBeLessThan(4_000);
   });
 
   it('defaults maxAttempts to 3', async () => {

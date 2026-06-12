@@ -5,10 +5,19 @@ export interface StructuredOptions<T> {
   system?: string;
   prompt: string;
   schema: z.ZodType<T>;
-  /** Total completion attempts before giving up. Default 3. */
+  /** Total completion attempts before giving up. Default 3, clamped to >= 1. */
   maxAttempts?: number;
   temperature?: number;
   maxTokens?: number;
+}
+
+/** Max chars of a previous response echoed into repair prompts / error messages. */
+const RESPONSE_EXCERPT_MAX_CHARS = 2000;
+
+/** Truncates long text, appending an explicit truncation note. */
+function excerptOf(text: string, max = RESPONSE_EXCERPT_MAX_CHARS): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}\n[... truncated, ${text.length - max} more chars]`;
 }
 
 export interface StructuredResult<T> {
@@ -25,7 +34,7 @@ export class StructuredOutputError extends Error {
 
   constructor(args: { attempts: number; lastErrors: unknown; lastText: string }) {
     super(
-      `Structured output failed after ${args.attempts} attempt(s): ${JSON.stringify(args.lastErrors)}`,
+      `Structured output failed after ${args.attempts} attempt(s): ${JSON.stringify(args.lastErrors)}; last response: ${excerptOf(args.lastText)}`,
     );
     this.name = 'StructuredOutputError';
     this.attempts = args.attempts;
@@ -45,16 +54,32 @@ function describeSchema(schema: z.ZodType<unknown>): string {
   }
 }
 
-/** Strip markdown code fences; fall back to the first '{' .. last '}' span. */
+/**
+ * Strip markdown code fences; fall back to a '{' .. last '}' span. When prose
+ * before the JSON itself contains braces, successive candidate start braces
+ * are tried until one yields parseable JSON.
+ */
 export function extractJsonText(raw: string): string {
   let text = raw.trim();
   const fence = text.match(/^```[a-zA-Z]*\s*\n?([\s\S]*?)\n?```\s*$/);
   if (fence?.[1] !== undefined) text = fence[1].trim();
-  if (!text.startsWith('{')) {
-    const start = text.indexOf('{');
-    const end = text.lastIndexOf('}');
-    if (start !== -1 && end > start) text = text.slice(start, end + 1);
+  if (text.startsWith('{')) return text;
+
+  const end = text.lastIndexOf('}');
+  let start = text.indexOf('{');
+  while (start !== -1 && start < end) {
+    const candidate = text.slice(start, end + 1);
+    try {
+      JSON.parse(candidate);
+      return candidate;
+    } catch {
+      start = text.indexOf('{', start + 1);
+    }
   }
+  // Nothing parsed: keep the widest span (original behavior) so the caller's
+  // JSON.parse error mentions the actual content, or the raw text if no braces.
+  const first = text.indexOf('{');
+  if (first !== -1 && end > first) return text.slice(first, end + 1);
   return text;
 }
 
@@ -62,7 +87,7 @@ export async function completeStructured<T>(
   llm: LLM,
   opts: StructuredOptions<T>,
 ): Promise<StructuredResult<T>> {
-  const maxAttempts = opts.maxAttempts ?? 3;
+  const maxAttempts = Math.max(1, Math.floor(opts.maxAttempts ?? 3));
   const schemaDescription = describeSchema(opts.schema);
   const basePrompt = [
     opts.prompt,
@@ -111,8 +136,8 @@ export async function completeStructured<T>(
       basePrompt,
       '',
       repairReason,
-      'Previous response:',
-      completion.text,
+      'Previous response (may be truncated):',
+      excerptOf(completion.text),
       '',
       'Return ONLY the corrected JSON.',
     ].join('\n');
