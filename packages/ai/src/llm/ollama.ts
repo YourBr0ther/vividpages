@@ -56,7 +56,7 @@ export class OllamaLLM implements LLM {
           model: this.model,
           messages,
           stream: false,
-          format: opts.json ? 'json' : undefined,
+          format: opts.jsonSchema ?? (opts.json ? 'json' : undefined),
           options: {
             num_predict: opts.maxTokens,
             temperature: opts.temperature,

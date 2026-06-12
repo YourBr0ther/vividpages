@@ -115,6 +115,20 @@ describe('completeStructured', () => {
     expect(sent.maxTokens).toBe(256);
   });
 
+  it('passes the derived JSON schema for constrained decoding (jsonSchema)', async () => {
+    const llm = new FakeLLM([{ text: '{"animal":"spider","legs":8}' }]);
+    await completeStructured(llm, {
+      prompt: 'Describe a spider',
+      schema: animalSchema,
+    });
+    const sent = llm.calls[0]!;
+    expect(sent.jsonSchema).toBeTypeOf('object');
+    expect(sent.jsonSchema).toMatchObject({
+      type: 'object',
+      properties: { animal: { type: 'string' }, legs: { type: 'number' } },
+    });
+  });
+
   it('strips markdown fences from the response', async () => {
     const llm = new FakeLLM([
       { text: '```json\n{"animal":"spider","legs":8}\n```' },

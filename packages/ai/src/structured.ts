@@ -43,14 +43,14 @@ export class StructuredOutputError extends Error {
   }
 }
 
-/** Compact textual description of the expected JSON shape, derived from the zod schema. */
-function describeSchema(schema: z.ZodType<unknown>): string {
+/** zod schema -> JSON Schema object, or undefined when not convertible. */
+function toJsonSchema(schema: z.ZodType<unknown>): Record<string, unknown> | undefined {
   try {
-    return JSON.stringify(z.toJSONSchema(schema));
+    return z.toJSONSchema(schema) as Record<string, unknown>;
   } catch {
     // Some schemas (e.g. transforms, custom types) cannot be converted; the
-    // repair loop still enforces the schema, so a generic hint is acceptable.
-    return 'an object matching the requested structure';
+    // repair loop still enforces the schema, so this is best-effort.
+    return undefined;
   }
 }
 
@@ -88,7 +88,10 @@ export async function completeStructured<T>(
   opts: StructuredOptions<T>,
 ): Promise<StructuredResult<T>> {
   const maxAttempts = Math.max(1, Math.floor(opts.maxAttempts ?? 3));
-  const schemaDescription = describeSchema(opts.schema);
+  const jsonSchema = toJsonSchema(opts.schema);
+  const schemaDescription = jsonSchema
+    ? JSON.stringify(jsonSchema)
+    : 'an object matching the requested structure';
   const basePrompt = [
     opts.prompt,
     '',
@@ -107,6 +110,7 @@ export async function completeStructured<T>(
       system: opts.system,
       prompt,
       json: true,
+      jsonSchema,
       maxTokens: opts.maxTokens,
       temperature: opts.temperature,
     });
