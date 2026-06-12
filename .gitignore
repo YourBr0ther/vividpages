@@ -1,0 +1,7 @@
+*.epub
+node_modules/
+.env
+.env.*
+!.env.example
+.next/
+dist/
