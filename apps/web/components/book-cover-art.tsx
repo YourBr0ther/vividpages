@@ -16,7 +16,11 @@ const BINDINGS = [
   ['#1f2a38', '#0f141b'], // midnight
 ] as const;
 
-function bindingFor(title: string): (typeof BINDINGS)[number] {
+/**
+ * Deterministic duotone for a name/title; exported so character portraits
+ * (cast gallery, preview avatars) share the same binding-cloth treatment.
+ */
+export function bindingFor(title: string): readonly [string, string] {
   let hash = 0;
   for (let i = 0; i < title.length; i += 1) hash = (hash * 31 + title.charCodeAt(i)) | 0;
   return BINDINGS[Math.abs(hash) % BINDINGS.length] as (typeof BINDINGS)[number];

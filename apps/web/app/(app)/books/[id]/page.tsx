@@ -5,11 +5,21 @@ import { cache } from 'react';
 
 import { auth } from '@/auth';
 import { FallbackCover, SpineOverlay } from '@/components/book-cover-art';
+import { CastStrip } from '@/components/cast-strip';
 import { ChapterList } from '@/components/chapter-list';
 import { DangerZone } from '@/components/danger-zone';
+import { PipelineControls } from '@/components/pipeline-controls';
 import { STATUS_LABELS } from '@/lib/book-card-data';
 import { findOwnedBook } from '@/lib/find-owned-book';
-import { getReadingProgress, listChaptersWithScenes } from '@/lib/queries';
+import {
+  countAnalyzedScenes,
+  getLatestRun,
+  getReadingProgress,
+  isActiveRun,
+  listCast,
+  listChaptersWithScenes,
+  resolveLlmDisplay,
+} from '@/lib/queries';
 import { chapterLabel } from '@/lib/reader-types';
 
 type PageProps = { params: Promise<{ id: string }> };
@@ -45,9 +55,13 @@ export default async function BookDetailPage({ params }: PageProps) {
   const { userId, book } = await loadOwnedBook(id);
   if (!book) notFound();
 
-  const [chapters, progress] = await Promise.all([
+  const [chapters, progress, cast, analyzedScenes, latestRun, llm] = await Promise.all([
     listChaptersWithScenes(book.id),
     getReadingProgress(userId, book.id),
+    listCast(book.id),
+    countAnalyzedScenes(book.id),
+    getLatestRun(book.id),
+    resolveLlmDisplay(userId, book),
   ]);
   const sceneCount = chapters.reduce((total, chapter) => total + chapter.sceneCount, 0);
   const readable = chapters.length > 0;
@@ -146,31 +160,21 @@ export default async function BookDetailPage({ params }: PageProps) {
         />
 
         <aside className="space-y-6">
-          <section
-            aria-label="Analysis and illustration"
-            className="rounded-xl border border-stone-800/70 bg-stone-900/40 p-5"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="font-display text-lg tracking-tight text-parchment">
-                Analysis &amp; illustration
-              </h2>
-              <span className="shrink-0 rounded-full border border-stone-700 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.2em] text-stone-500">
-                Coming in M4
-              </span>
-            </div>
-            <p className="mt-1.5 text-sm leading-relaxed text-stone-500">
-              Scene analysis, the character cast, and illustrated storyboards will be run from
-              here once the imagination pipeline lands.
-            </p>
-            <button
-              type="button"
-              disabled
-              title="Coming soon"
-              className="mt-4 cursor-not-allowed rounded-full border border-stone-700 px-4 py-1.5 text-sm text-stone-600"
-            >
-              Run analysis
-            </button>
-          </section>
+          {cast.length > 0 ? (
+            <CastStrip bookId={book.id} cast={cast.slice(0, 5)} total={cast.length} />
+          ) : null}
+
+          <PipelineControls
+            bookId={book.id}
+            status={book.status}
+            initiallyActive={isActiveRun(latestRun)}
+            initialError={book.error}
+            analyzedScenes={analyzedScenes}
+            totalScenes={sceneCount}
+            characterCount={cast.length}
+            provider={llm.provider}
+            model={llm.model}
+          />
 
           <DangerZone bookId={book.id} bookTitle={book.title} />
         </aside>

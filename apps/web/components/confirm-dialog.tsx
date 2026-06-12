@@ -16,6 +16,7 @@ export function ConfirmDialog({
   title,
   body,
   confirmLabel,
+  busyLabel = 'Working…',
   busy = false,
   onConfirm,
   onCancel,
@@ -23,6 +24,8 @@ export function ConfirmDialog({
   title: string;
   body: string;
   confirmLabel: string;
+  /** Confirm-button text while `busy` (e.g. 'Deleting…'). */
+  busyLabel?: string;
   busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -110,7 +113,7 @@ export function ConfirmDialog({
             disabled={busy}
             className="rounded-full bg-red-400/90 px-4 py-1.5 text-sm font-semibold text-stone-950 transition hover:bg-red-300 disabled:opacity-60"
           >
-            {busy ? 'Deleting…' : confirmLabel}
+            {busy ? busyLabel : confirmLabel}
           </button>
         </div>
       </div>

@@ -64,6 +64,7 @@ export function DangerZone({ bookId, bookTitle }: { bookId: string; bookTitle: s
           title="Remove this book?"
           body={`“${bookTitle}” and everything generated for it will be deleted. This cannot be undone.`}
           confirmLabel="Delete"
+          busyLabel="Deleting…"
           busy={busy}
           onConfirm={handleDelete}
           onCancel={() => {
