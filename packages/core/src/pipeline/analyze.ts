@@ -18,7 +18,7 @@ import {
 import { and, asc, eq, isNotNull, sql } from 'drizzle-orm';
 
 import { buildSceneAnalysisPrompt, type RosterEntry } from '../analysis/prompt';
-import { candidateNames, findRosterMatch } from '../analysis/roster';
+import { candidateNames, findRosterMatch, splitCompoundName } from '../analysis/roster';
 import { sceneAnalysisSchema, type SceneAnalysis } from '../analysis/schema';
 import { getEnv } from '../env';
 import { getQueue, type StageJobPayload } from '../queues';
@@ -107,7 +107,13 @@ async function loadRoster(db: Db, bookId: string): Promise<CharacterRosterEntry[
   });
 }
 
-/** Writes one scene's analysis: scene columns + character/link rows. */
+/**
+ * Writes one scene's analysis: scene columns + character/link rows.
+ *
+ * All writes for the scene run in one transaction so a crash can never leave
+ * a partial scene behind (e.g. a scene_characters link inserted but its
+ * character's sceneCount not yet incremented, which would undercount forever).
+ */
 async function persistSceneAnalysis(
   db: Db,
   args: {
@@ -119,73 +125,84 @@ async function persistSceneAnalysis(
 ): Promise<void> {
   const { bookId, sceneId, analysis, roster } = args;
 
-  const linkedCharacterIds = new Set<string>();
-  for (const reported of analysis.characters) {
-    // 'Trystan (The Villain)' should match either 'Trystan' or 'The Villain'.
-    const names = candidateNames(reported.name);
-    if (names.length === 0) continue;
-    const mentionName = names[0]!;
+  await db.transaction(async (tx) => {
+    const linkedCharacterIds = new Set<string>();
+    for (const reported of analysis.characters) {
+      // 'Trystan (The Villain)' should match either 'Trystan' or 'The Villain'.
+      const names = candidateNames(reported.name);
+      if (names.length === 0) continue;
+      const mentionName = names[0]!;
 
-    let entry: CharacterRosterEntry | undefined;
-    for (const candidate of names) {
-      entry = findRosterMatch(roster, candidate);
-      if (entry) break;
-    }
-    if (!entry) {
-      // Prefer the pre-parenthetical part as the display name; keep the
-      // other fragments as aliases so later mentions of either half match.
-      const name = names.length > 1 ? names[1]! : names[0]!;
-      const aliases = names.filter((n) => n !== name);
-      const inserted = await db
-        .insert(characters)
-        .values({ bookId, name, aliases, sceneCount: 0 })
-        .returning({ id: characters.id });
-      entry = { id: inserted[0]!.id, name, aliases, oneLineDesc: null };
-      roster.push(entry);
-    }
-    // The model occasionally lists the same person twice under different
-    // epithets; the first mention wins for this scene.
-    if (linkedCharacterIds.has(entry.id)) continue;
-    linkedCharacterIds.add(entry.id);
+      let entry: CharacterRosterEntry | undefined;
+      for (const candidate of names) {
+        entry = findRosterMatch(roster, candidate);
+        if (entry) break;
+      }
+      if (!entry) {
+        // Pick the fragment that looks like a personal name as the display
+        // name ('The Villain (Trystan)' -> 'Trystan'); the other fragments
+        // become aliases so later mentions of either half match.
+        const { name, aliases } = splitCompoundName(reported.name);
+        const inserted = await tx
+          .insert(characters)
+          .values({ bookId, name, aliases, sceneCount: 0 })
+          .returning({ id: characters.id });
+        entry = { id: inserted[0]!.id, name, aliases, oneLineDesc: null };
+        roster.push(entry);
+      }
+      // The model occasionally lists the same person twice under different
+      // epithets; the first mention wins for this scene.
+      if (linkedCharacterIds.has(entry.id)) continue;
+      linkedCharacterIds.add(entry.id);
 
-    const descriptionDelta = reported.descriptionDelta?.trim() || null;
-    const stateChanges = reported.stateChanges?.trim() || null;
-    // Conflict can only happen on resume after a crash mid-scene; in that
-    // case the previous attempt already counted this scene for sceneCount.
-    const link = await db
-      .insert(sceneCharacters)
-      .values({
-        sceneId,
-        characterId: entry.id,
-        mentionName,
-        descriptionDelta,
-        stateChanges: stateChanges ? { note: stateChanges } : null,
+      const descriptionDelta = reported.descriptionDelta?.trim() || null;
+      const stateChanges = reported.stateChanges?.trim() || null;
+      // Conflict means this scene is being re-analyzed: refresh the link with
+      // the new analysis. `xmax = 0` distinguishes a fresh insert (count the
+      // scene) from a conflict-update (already counted by the first pass).
+      const link = await tx
+        .insert(sceneCharacters)
+        .values({
+          sceneId,
+          characterId: entry.id,
+          mentionName,
+          descriptionDelta,
+          stateChanges: stateChanges ? { note: stateChanges } : null,
+        })
+        .onConflictDoUpdate({
+          target: [sceneCharacters.sceneId, sceneCharacters.characterId],
+          set: {
+            mentionName,
+            descriptionDelta,
+            stateChanges: stateChanges ? { note: stateChanges } : null,
+            updatedAt: new Date(),
+          },
+        })
+        .returning({ inserted: sql<boolean>`(xmax = 0)` });
+      if (link[0]?.inserted) {
+        await tx
+          .update(characters)
+          .set({ sceneCount: sql`${characters.sceneCount} + 1` })
+          .where(eq(characters.id, entry.id));
+      }
+      if (entry.oneLineDesc === null && descriptionDelta) {
+        entry.oneLineDesc = descriptionDelta;
+      }
+    }
+
+    await tx
+      .update(scenes)
+      .set({
+        summary: analysis.summary,
+        setting: analysis.setting,
+        timeOfDay: analysis.timeOfDay,
+        mood: analysis.mood,
+        sceneType: analysis.sceneType,
+        keyVisualMoment: analysis.keyVisualMoment,
+        analysisStatus: 'done',
       })
-      .onConflictDoNothing()
-      .returning({ sceneId: sceneCharacters.sceneId });
-    if (link.length > 0) {
-      await db
-        .update(characters)
-        .set({ sceneCount: sql`${characters.sceneCount} + 1` })
-        .where(eq(characters.id, entry.id));
-    }
-    if (entry.oneLineDesc === null && descriptionDelta) {
-      entry.oneLineDesc = descriptionDelta;
-    }
-  }
-
-  await db
-    .update(scenes)
-    .set({
-      summary: analysis.summary,
-      setting: analysis.setting,
-      timeOfDay: analysis.timeOfDay,
-      mood: analysis.mood,
-      sceneType: analysis.sceneType,
-      keyVisualMoment: analysis.keyVisualMoment,
-      analysisStatus: 'done',
-    })
-    .where(eq(scenes.id, sceneId));
+      .where(eq(scenes.id, sceneId));
+  });
 }
 
 /**

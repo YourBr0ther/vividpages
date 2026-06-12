@@ -5,6 +5,7 @@ import {
   findRosterMatch,
   nameKey,
   normalizeCharacterName,
+  splitCompoundName,
 } from '../src/analysis/roster';
 
 describe('normalizeCharacterName', () => {
@@ -55,6 +56,44 @@ describe('candidateNames', () => {
   it('drops empty fragments and dedupes', () => {
     expect(candidateNames('Evie ()')).toEqual(['Evie ()', 'Evie']);
     expect(candidateNames('')).toEqual([]);
+  });
+});
+
+describe('splitCompoundName', () => {
+  it('picks the personal name as canonical when the epithet comes first', () => {
+    expect(splitCompoundName('The Villain (Trystan)')).toEqual({
+      name: 'Trystan',
+      aliases: ['The Villain (Trystan)', 'The Villain'],
+    });
+  });
+
+  it('picks the personal name as canonical when it comes first', () => {
+    expect(splitCompoundName('Trystan (The Villain)')).toEqual({
+      name: 'Trystan',
+      aliases: ['Trystan (The Villain)', 'The Villain'],
+    });
+  });
+
+  it('takes the first fragment when both halves look like personal names', () => {
+    expect(splitCompoundName('Blade (Bladeworth Maverine)')).toEqual({
+      name: 'Blade',
+      aliases: ['Blade (Bladeworth Maverine)', 'Bladeworth Maverine'],
+    });
+  });
+
+  it('falls back to the first fragment when every half is an epithet', () => {
+    expect(splitCompoundName('The Villain (The Boss)')).toEqual({
+      name: 'The Villain',
+      aliases: ['The Villain (The Boss)', 'The Boss'],
+    });
+  });
+
+  it('returns a plain name with no aliases when there is no parenthetical', () => {
+    expect(splitCompoundName('  Evie  Sage ')).toEqual({ name: 'Evie Sage', aliases: [] });
+  });
+
+  it('returns an empty name for empty input', () => {
+    expect(splitCompoundName('')).toEqual({ name: '', aliases: [] });
   });
 });
 

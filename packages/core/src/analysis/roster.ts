@@ -40,6 +40,27 @@ export function candidateNames(raw: string): string[] {
 }
 
 /**
+ * Splits a compound LLM-reported name like 'The Villain (Trystan)' into a
+ * canonical display name plus aliases (the remaining candidate forms).
+ *
+ * Canonical-name heuristic: among the two fragments (the part before the
+ * parenthetical and the parenthetical content, in that order), prefer the
+ * FIRST one that looks like a personal name — i.e. does not start with
+ * 'the '. Epithets ('The Villain') thus become aliases regardless of
+ * position. When both fragments look personal ('Blade (Bladeworth
+ * Maverine)') the first one wins — we deliberately do not rank competing
+ * personal names. When no fragment qualifies, the first fragment wins.
+ */
+export function splitCompoundName(raw: string): { name: string; aliases: string[] } {
+  const names = candidateNames(raw);
+  if (names.length === 0) return { name: '', aliases: [] };
+  if (names.length === 1) return { name: names[0]!, aliases: [] };
+  const fragments = names.slice(1);
+  const name = fragments.find((n) => !/^the\s/i.test(n)) ?? fragments[0]!;
+  return { name, aliases: names.filter((n) => n !== name) };
+}
+
+/**
  * Finds the roster entry whose name or any alias matches `name`
  * (case- and diacritics-insensitive).
  */
