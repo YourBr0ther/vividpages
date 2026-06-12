@@ -226,6 +226,12 @@ export class ComfyUIImageGen implements ImageGen {
 
   private async pollHistory(promptId: string, deadline: number): Promise<HistoryEntry> {
     for (;;) {
+      // Deadline check at the TOP of the loop so an overshooting sleep still
+      // produces the queue-position TIMEOUT (not a bare deadline error from
+      // request()).
+      if (Date.now() >= deadline) {
+        throw await this.pollTimeoutError(promptId);
+      }
       const res = await this.request(`/history/${promptId}`, deadline);
       if (!res.ok) {
         throw new ComfyUIError(
@@ -244,14 +250,19 @@ export class ComfyUIImageGen implements ImageGen {
         if (status.completed || hasOutputs) return entry;
       }
       if (Date.now() + this.pollIntervalMs > deadline) {
-        const queueDetail = await this.describeQueuePosition(promptId);
-        throw new ComfyUIError(
-          'TIMEOUT',
-          `generation did not complete within ${this.timeoutMs}ms (prompt ${promptId}${queueDetail})`,
-        );
+        throw await this.pollTimeoutError(promptId);
       }
       await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs));
     }
+  }
+
+  /** TIMEOUT with best-effort queue context for a poll that ran out of time. */
+  private async pollTimeoutError(promptId: string): Promise<ComfyUIError> {
+    const queueDetail = await this.describeQueuePosition(promptId);
+    return new ComfyUIError(
+      'TIMEOUT',
+      `generation did not complete within ${this.timeoutMs}ms (prompt ${promptId}${queueDetail})`,
+    );
   }
 
   private describeExecutionError(status: NonNullable<HistoryEntry['status']>): string {
