@@ -80,7 +80,11 @@ export default async function AppLayout({
         </div>
       </header>
 
-      <main className="relative z-10 mx-auto w-full max-w-6xl px-6 pb-24 pt-12">
+      {/* Positioned (paints above the fixed grain/atmosphere layers by tree
+          order) but deliberately NOT a stacking context: fixed overlays
+          rendered by pages (reader, dialogs) must be able to cover the
+          sticky header above. */}
+      <main className="relative mx-auto w-full max-w-6xl px-6 pb-24 pt-12">
         {children}
       </main>
     </div>
