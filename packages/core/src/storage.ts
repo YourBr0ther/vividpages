@@ -2,6 +2,7 @@ import type { Readable } from 'node:stream';
 
 import {
   CreateBucketCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -51,6 +52,11 @@ export async function getObject(bucket: Bucket, key: string): Promise<Buffer> {
     throw new Error(`storage: empty body for s3://${bucket}/${key}`);
   }
   return Buffer.from(await response.Body.transformToByteArray());
+}
+
+/** Deletes an object; S3 semantics make this a no-op if the key is absent. */
+export async function deleteObject(bucket: Bucket, key: string): Promise<void> {
+  await getS3Client().send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }
 
 export async function getObjectStream(bucket: Bucket, key: string): Promise<Readable> {

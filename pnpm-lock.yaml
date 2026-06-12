@@ -20,6 +20,9 @@ importers:
       '@node-rs/argon2':
         specifier: ^2.0.2
         version: 2.0.2
+      '@vividpages/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@vividpages/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -94,6 +97,9 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: ^3.0.0
         version: 3.1067.0
+      '@vividpages/db':
+        specifier: workspace:*
+        version: link:../db
       bullmq:
         specifier: ^5.0.0
         version: 5.78.0
@@ -103,6 +109,9 @@ importers:
       domhandler:
         specifier: ^5.0.3
         version: 5.0.3
+      drizzle-orm:
+        specifier: ^0.44.0
+        version: 0.44.7(@types/pg@8.20.0)(pg@8.21.0)
       fast-xml-parser:
         specifier: ^5.8.0
         version: 5.8.0

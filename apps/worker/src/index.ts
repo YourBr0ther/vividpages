@@ -22,8 +22,12 @@ import {
   getEnv,
   makeWorker,
   type QueueName,
+  type StageJobPayload,
   type Worker,
 } from '@vividpages/core';
+import { runIngest } from '@vividpages/core/pipeline/ingest';
+import { failRun, setBookStatus } from '@vividpages/core/pipeline/progress';
+import { runSegment } from '@vividpages/core/pipeline/segment';
 import { closeDb } from '@vividpages/db';
 
 // Fail fast on a misconfigured environment.
@@ -39,14 +43,40 @@ const concurrency: Record<QueueName, number> = {
   imagine: env.WORKER_CONCURRENCY_IMAGINE,
 };
 
-// Stub processors for now — later tasks replace these with the real pipeline
-// stages. console.log is fine at this stage; structured logging can come
-// later.
+// Real pipeline stages; analyze/profiles/imagine remain stubs until M4/M5.
+const stageFns: Partial<Record<QueueName, (payload: StageJobPayload) => Promise<void>>> = {
+  ingest: runIngest,
+  segment: runSegment,
+};
+
 const workers: Worker[] = (Object.keys(QUEUE) as QueueName[]).map((name) => {
+  const stageFn = stageFns[name];
   const worker = makeWorker(
     name,
     async (job) => {
-      console.log(`[${name}] processing job ${job.id}:`, JSON.stringify(job.data));
+      const { bookId, runId } = job.data;
+      if (!stageFn) {
+        // Stub for not-yet-implemented stages.
+        console.log(`[${name}] processing job ${job.id}:`, JSON.stringify(job.data));
+        return;
+      }
+      try {
+        await stageFn({ bookId, runId });
+      } catch (err) {
+        // Mark the run/book failed on EVERY attempt (not just the last):
+        // BullMQ will still retry the job, and the stage function flips the
+        // status back to its running state at the start of the retry, so a
+        // transient 'failed' between attempts is acceptable and keeps this
+        // logic simple.
+        const message = err instanceof Error ? err.message : String(err);
+        try {
+          await failRun(runId, message);
+          await setBookStatus(bookId, 'failed', message);
+        } catch (bookkeepingErr) {
+          console.error(`[${name}] failed to record failure for book ${bookId}:`, bookkeepingErr);
+        }
+        throw err; // rethrow so BullMQ retry/backoff still applies
+      }
     },
     { concurrency: concurrency[name] },
   );
