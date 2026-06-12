@@ -7,6 +7,8 @@
     ".": "./src/index.ts",
     "./llm/types": "./src/llm/types.ts",
     "./llm/ollama": "./src/llm/ollama.ts",
+    "./embed/types": "./src/embed/types.ts",
+    "./embed/ollama": "./src/embed/ollama.ts",
     "./structured": "./src/structured.ts"
   },
   "scripts": {

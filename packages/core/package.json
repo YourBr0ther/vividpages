@@ -12,7 +12,8 @@
     "./storage": "./src/storage.ts",
     "./queues": "./src/queues.ts",
     "./pipeline/*": "./src/pipeline/*.ts",
-    "./analysis/*": "./src/analysis/*.ts"
+    "./analysis/*": "./src/analysis/*.ts",
+    "./characters/*": "./src/characters/*.ts"
   },
   "scripts": {
     "test": "vitest run"

@@ -1,27 +1,15 @@
+import { OllamaError, postOllamaJson } from '../ollama/request';
 import type { CompleteOptions, LLM, LLMCompletion } from './types';
+
+// Re-exported here for backwards compatibility: OllamaError predates the
+// shared request module and is widely imported from this path.
+export { OllamaError };
 
 export interface OllamaLLMOptions {
   baseUrl: string;
   model: string;
   /** Per-request timeout in milliseconds. Default 120_000. */
   timeoutMs?: number;
-}
-
-export class OllamaError extends Error {
-  readonly status?: number;
-  /**
-   * 'MODEL_NOT_FOUND' — the model is not available on the server.
-   * 'TIMEOUT'         — the request exceeded timeoutMs.
-   * 'NETWORK'         — the server could not be reached (fetch failed).
-   */
-  readonly code?: string;
-
-  constructor(message: string, opts: { status?: number; code?: string } = {}) {
-    super(message);
-    this.name = 'OllamaError';
-    this.status = opts.status;
-    this.code = opts.code;
-  }
 }
 
 interface OllamaChatResponse {
@@ -47,60 +35,22 @@ export class OllamaLLM implements LLM {
     if (opts.system) messages.push({ role: 'system', content: opts.system });
     messages.push({ role: 'user', content: opts.prompt });
 
-    let res: Response;
-    try {
-      res = await fetch(`${this.baseUrl}/api/chat`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          model: this.model,
-          messages,
-          stream: false,
-          format: opts.jsonSchema ?? (opts.json ? 'json' : undefined),
-          options: {
-            num_predict: opts.maxTokens,
-            temperature: opts.temperature,
-          },
-        }),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-    } catch (err) {
-      const name = err instanceof Error ? err.name : '';
-      if (name === 'TimeoutError' || name === 'AbortError') {
-        throw new OllamaError(
-          `Ollama /api/chat timed out after ${this.timeoutMs}ms (model '${this.model}' at ${this.baseUrl})`,
-          { code: 'TIMEOUT' },
-        );
-      }
-      // Undici reports connection problems as TypeError('fetch failed') with
-      // the underlying error on `cause`.
-      const cause =
-        err instanceof Error && err.cause instanceof Error ? `: ${err.cause.message}` : '';
-      const detail = err instanceof Error ? err.message : String(err);
-      throw new OllamaError(
-        `Ollama request to ${this.baseUrl} failed (${detail}${cause})`,
-        { code: 'NETWORK' },
-      );
-    }
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      const excerpt = body.slice(0, 500);
-      // Prefer the error body for detection: a bare 404 with an unrelated (or
-      // empty) body may just be a misrouted baseUrl, not a missing model.
-      const modelNotFound =
-        /model\b.*(not found|not exist)/i.test(excerpt) ||
-        (res.status === 404 && excerpt.trim() === '');
-      throw new OllamaError(
-        `Ollama /api/chat failed (${res.status}): ${excerpt}`,
-        {
-          status: res.status,
-          code: modelNotFound ? 'MODEL_NOT_FOUND' : undefined,
+    const data = await postOllamaJson<OllamaChatResponse>({
+      baseUrl: this.baseUrl,
+      path: '/api/chat',
+      timeoutMs: this.timeoutMs,
+      body: {
+        model: this.model,
+        messages,
+        stream: false,
+        format: opts.jsonSchema ?? (opts.json ? 'json' : undefined),
+        options: {
+          num_predict: opts.maxTokens,
+          temperature: opts.temperature,
         },
-      );
-    }
+      },
+    });
 
-    const data = (await res.json()) as OllamaChatResponse;
     return {
       text: data.message?.content ?? '',
       tokensIn: data.prompt_eval_count ?? 0,
