@@ -8,26 +8,40 @@ export { schema };
 
 export type Db = NodePgDatabase<typeof schema>;
 
-function createDb(): Db {
-  const pool = new pg.Pool({
-    connectionString:
-      process.env.DATABASE_URL ??
-      'postgres://vividpages:vividpages@localhost:5432/vividpages',
-  });
-  return drizzle(pool, { schema, casing: 'snake_case' });
-}
-
+let pool: pg.Pool | undefined;
 let instance: Db | undefined;
 
 /**
- * Lazy singleton: the pg Pool is only created on first use, so importing this
- * package (e.g. from drizzle.config.ts or build-time code) never opens
- * connections.
+ * Lazy singleton: the pg Pool is only created on first call, so importing this
+ * package (e.g. from build-time code) never opens connections.
+ *
+ * Requires DATABASE_URL to be set; there is intentionally no fallback here
+ * (the localhost fallback lives only in drizzle.config.ts for dev tooling).
  */
-export const db: Db = new Proxy({} as Db, {
-  get(_target, prop) {
-    instance ??= createDb();
-    const value = Reflect.get(instance, prop, instance);
-    return typeof value === 'function' ? value.bind(instance) : value;
-  },
-});
+export function getDb(): Db {
+  if (!instance) {
+    const connectionString = process.env.DATABASE_URL;
+    if (!connectionString) {
+      throw new Error(
+        '@vividpages/db: DATABASE_URL is not set. ' +
+          'Set it to a Postgres connection string, e.g. postgres://user:pass@host:5432/dbname.',
+      );
+    }
+    pool = new pg.Pool({ connectionString });
+    instance = drizzle(pool, { schema, casing: 'snake_case' });
+  }
+  return instance;
+}
+
+/**
+ * Ends the pg Pool and resets the singleton so workers/tests can shut down
+ * gracefully. Safe to call when no pool was ever created.
+ */
+export async function closeDb(): Promise<void> {
+  const p = pool;
+  pool = undefined;
+  instance = undefined;
+  if (p) {
+    await p.end();
+  }
+}

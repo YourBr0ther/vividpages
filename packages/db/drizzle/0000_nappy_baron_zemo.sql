@@ -1,3 +1,4 @@
+-- NOTE: the CREATE EXTENSION line below was manually prepended before this migration was applied; do not edit it (its hash is recorded in the migrations table).
 CREATE EXTENSION IF NOT EXISTS vector;--> statement-breakpoint
 CREATE TABLE "accounts" (
 	"user_id" uuid NOT NULL,

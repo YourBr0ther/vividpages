@@ -8,6 +8,13 @@
       "when": 1781271469755,
       "tag": "0000_nappy_baron_zemo",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1781271987097,
+      "tag": "0001_cool_dreaming_celestial",
+      "breakpoints": true
     }
   ]
 }

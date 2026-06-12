@@ -18,6 +18,26 @@ import {
 // Column names are derived from TS property names via `casing: 'snake_case'`
 // (set in drizzle.config.ts and in the drizzle() client in index.ts).
 
+// ---------------------------------------------------------------------------
+// Status / enum unions (TS-only via .$type<>(); stored as plain text)
+// ---------------------------------------------------------------------------
+
+export type UserRole = 'user' | 'admin';
+export type BookStatus =
+  | 'uploading'
+  | 'ingesting'
+  | 'segmenting'
+  | 'analyzing'
+  | 'profiling'
+  | 'imagining'
+  | 'ready'
+  | 'failed';
+export type SceneAnalysisStatus = 'pending' | 'done' | 'failed';
+export type ImageKind = 'character_portrait' | 'scene_storyboard' | 'book_cover';
+export type ImageStatus = 'pending' | 'generating' | 'done' | 'failed';
+export type PipelineRunStatus = 'running' | 'done' | 'failed';
+export type ApiKeyProvider = 'anthropic' | 'openai';
+
 const createdAt = () => timestamp({ withTimezone: true }).notNull().defaultNow();
 const updatedAt = () =>
   timestamp({ withTimezone: true })
@@ -37,7 +57,7 @@ export const users = pgTable('users', {
   image: text(),
   /** Null for OAuth-only users. */
   passwordHash: text(),
-  role: text().notNull().default('user'),
+  role: text().$type<UserRole>().notNull().default('user'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -108,8 +128,7 @@ export const apiKeys = pgTable(
     userId: uuid()
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    /** 'anthropic' | 'openai' */
-    provider: text().notNull(),
+    provider: text().$type<ApiKeyProvider>().notNull(),
     /** AES-256-GCM ciphertext (iv + tag + data); never returned decrypted. */
     ciphertext: text().notNull(),
     label: text(),
@@ -148,10 +167,11 @@ export const books = pgTable(
     sha256: text().notNull(),
     coverObjectKey: text(),
     epubObjectKey: text(),
-    /** uploading | ingesting | segmenting | analyzing | profiling | imagining | ready | failed */
-    status: text().notNull().default('uploading'),
+    status: text().$type<BookStatus>().notNull().default('uploading'),
     error: text(),
-    stylePresetId: uuid().references(() => stylePresets.id),
+    stylePresetId: uuid().references(() => stylePresets.id, {
+      onDelete: 'set null',
+    }),
     wordCount: integer(),
     /** Providers/models chosen at upload; null = user defaults. */
     llmProvider: text(),
@@ -212,14 +232,15 @@ export const scenes = pgTable(
     mood: text(),
     sceneType: text(),
     keyVisualMoment: text(),
-    /** pending | done | failed */
-    analysisStatus: text().notNull().default('pending'),
+    analysisStatus: text().$type<SceneAnalysisStatus>().notNull().default('pending'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [
     unique('scenes_chapter_idx_unique').on(t.chapterId, t.idx),
-    index('scenes_book_global_idx').on(t.bookId, t.globalIdx),
+    // The global index is the reading-progress cursor; it must be unique
+    // within a book (also serves the book-wide ordered lookup).
+    unique('scenes_book_global_idx_unique').on(t.bookId, t.globalIdx),
   ],
 );
 
@@ -291,8 +312,7 @@ export const images = pgTable(
     bookId: uuid()
       .notNull()
       .references(() => books.id, { onDelete: 'cascade' }),
-    /** character_portrait | scene_storyboard | book_cover */
-    kind: text().notNull(),
+    kind: text().$type<ImageKind>().notNull(),
     /** characterId or sceneId depending on kind (no FK; polymorphic). */
     subjectId: uuid(),
     prompt: text(),
@@ -305,8 +325,7 @@ export const images = pgTable(
     thumbObjectKey: text(),
     width: integer(),
     height: integer(),
-    /** pending | generating | done | failed */
-    status: text().notNull().default('pending'),
+    status: text().$type<ImageStatus>().notNull().default('pending'),
     error: text(),
     /** Old versions are kept; highest version wins. */
     version: integer().notNull().default(1),
@@ -332,8 +351,7 @@ export const pipelineRuns = pgTable(
     stage: text().notNull(),
     percent: real().notNull().default(0),
     currentStep: text(),
-    /** running | done | failed */
-    status: text().notNull().default('running'),
+    status: text().$type<PipelineRunStatus>().notNull().default('running'),
     tokensIn: bigint({ mode: 'number' }).notNull().default(0),
     tokensOut: bigint({ mode: 'number' }).notNull().default(0),
     error: text(),
