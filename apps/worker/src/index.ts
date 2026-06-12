@@ -64,10 +64,11 @@ const workers: Worker[] = (Object.keys(QUEUE) as QueueName[]).map((name) => {
         await stageFn({ bookId, runId });
       } catch (err) {
         // Mark the run/book failed on EVERY attempt (not just the last):
-        // BullMQ will still retry the job, and the stage function flips the
-        // status back to its running state at the start of the retry, so a
-        // transient 'failed' between attempts is acceptable and keeps this
-        // logic simple.
+        // BullMQ will still retry the job. On retry, the stage function's
+        // initial setBookStatus() flips the book back to its running status,
+        // and reportProgress() sets the run back to 'running' and clears the
+        // error, so a transient 'failed' between attempts is acceptable and
+        // keeps this logic simple.
         const message = err instanceof Error ? err.message : String(err);
         try {
           await failRun(runId, message);

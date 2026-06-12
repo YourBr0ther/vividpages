@@ -7,6 +7,7 @@ import { and, desc, eq, inArray } from 'drizzle-orm';
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { auth } from '@/auth';
+import { isUniqueViolation } from '@/lib/db-errors';
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
 
@@ -67,30 +68,37 @@ export async function POST(request: NextRequest) {
   await putObject('epubs', epubObjectKey, buf, 'application/epub+zip');
 
   let book: typeof books.$inferSelect;
+  let runId: string;
   try {
-    // Placeholder title from the filename; ingest overwrites it with the
-    // authoritative EPUB metadata. Status starts at 'ingesting' because the
-    // job is enqueued in this same request.
-    const [created] = await db
-      .insert(books)
-      .values({
-        userId,
-        title: file.name.replace(/\.epub$/i, ''),
-        sha256,
-        epubObjectKey,
-        status: 'ingesting',
-      })
-      .returning();
-    if (!created) throw new Error('Book insert returned no row');
-    book = created;
+    // Book + run are created atomically so a failure can't leave an
+    // 'ingesting' book with no pipeline run.
+    ({ book, runId } = await db.transaction(async (tx) => {
+      // Placeholder title from the filename; ingest overwrites it with the
+      // authoritative EPUB metadata. Status starts at 'ingesting' because the
+      // job is enqueued in this same request.
+      const [created] = await tx
+        .insert(books)
+        .values({
+          userId,
+          title: file.name.replace(/\.epub$/i, ''),
+          sha256,
+          epubObjectKey,
+          status: 'ingesting',
+        })
+        .returning();
+      if (!created) throw new Error('Book insert returned no row');
+
+      const [run] = await tx
+        .insert(pipelineRuns)
+        .values({ bookId: created.id, stage: 'ingest', currentStep: 'Queued', status: 'running' })
+        .returning({ id: pipelineRuns.id });
+      if (!run) throw new Error('Pipeline run insert returned no row');
+
+      return { book: created, runId: run.id };
+    }));
   } catch (error) {
     // Unique-violation race: the same file was uploaded concurrently.
-    if (
-      error &&
-      typeof error === 'object' &&
-      'code' in error &&
-      (error as { code?: string }).code === '23505'
-    ) {
+    if (isUniqueViolation(error)) {
       return NextResponse.json(
         { error: 'This EPUB has already been uploaded.' },
         { status: 409 },
@@ -99,13 +107,30 @@ export async function POST(request: NextRequest) {
     throw error;
   }
 
-  const [run] = await db
-    .insert(pipelineRuns)
-    .values({ bookId: book.id, stage: 'ingest', currentStep: 'Queued', status: 'running' })
-    .returning({ id: pipelineRuns.id });
-  if (!run) throw new Error('Pipeline run insert returned no row');
-
-  await getQueue('ingest').add('ingest', { bookId: book.id, runId: run.id });
+  try {
+    await getQueue('ingest').add('ingest', { bookId: book.id, runId });
+  } catch (error) {
+    // The book/run rows already exist; mark them failed (honest, visible,
+    // deletable state) instead of leaving the book stuck at 'ingesting'.
+    console.error(`books: failed to enqueue ingest job for book ${book.id}:`, error);
+    const enqueueError = 'failed to enqueue ingest job';
+    try {
+      await db
+        .update(books)
+        .set({ status: 'failed', error: enqueueError })
+        .where(eq(books.id, book.id));
+      await db
+        .update(pipelineRuns)
+        .set({ status: 'failed', error: enqueueError })
+        .where(eq(pipelineRuns.id, runId));
+    } catch (bookkeepingError) {
+      console.error(`books: failed to mark book ${book.id} as failed:`, bookkeepingError);
+    }
+    return NextResponse.json(
+      { error: 'Failed to enqueue ingest job.' },
+      { status: 500 },
+    );
+  }
 
   return NextResponse.json({ book }, { status: 201 });
 }

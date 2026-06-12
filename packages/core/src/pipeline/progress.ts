@@ -15,9 +15,18 @@ export interface ProgressUpdate {
 
 export async function reportProgress(runId: string, update: ProgressUpdate): Promise<void> {
   const percent = Math.min(100, Math.max(0, update.percent));
+  // Status is forced back to 'running' and error cleared on every call so a
+  // run that failed and is being retried (BullMQ re-attempt) doesn't stay
+  // stuck at 'failed' with a stale error while it is actually progressing.
   await getDb()
     .update(pipelineRuns)
-    .set({ stage: update.stage, percent, currentStep: update.currentStep })
+    .set({
+      stage: update.stage,
+      percent,
+      currentStep: update.currentStep,
+      status: 'running',
+      error: null,
+    })
     .where(eq(pipelineRuns.id, runId));
 }
 
