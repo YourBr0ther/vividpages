@@ -35,20 +35,52 @@ const loginLimiter = createFixedWindowLimiter({
  * Lazily construct the Drizzle adapter on first use. getDb() requires
  * DATABASE_URL, which isn't (and shouldn't be) available during `next build`;
  * constructing the adapter at module scope would make the build fail.
+ *
+ * This must be a plain object with enumerable own methods, not a get-trap
+ * Proxy: @auth/core re-wraps the adapter via `Object.keys(adapter).reduce`,
+ * so an object with no own keys would yield an empty adapter (breaking OAuth
+ * sign-in with "getUserByAccount is not a function").
  */
 function lazyDrizzleAdapter(): Adapter {
   let real: Adapter | undefined;
-  return new Proxy({} as Adapter, {
-    get(_target, prop) {
-      real ??= DrizzleAdapter(getDb(), {
-        usersTable: users,
-        accountsTable: accounts,
-        sessionsTable: sessions,
-        verificationTokensTable: verificationTokens,
-      });
-      return Reflect.get(real, prop);
-    },
-  });
+  const getAdapter = () =>
+    (real ??= DrizzleAdapter(getDb(), {
+      usersTable: users,
+      accountsTable: accounts,
+      sessionsTable: sessions,
+      verificationTokensTable: verificationTokens,
+    }));
+  // Every method DrizzleAdapter's pg variant returns (v1.11.2, lib/pg.js) —
+  // including getAccount and the WebAuthn authenticator methods, which it
+  // provides unconditionally.
+  const methods = [
+    'createUser',
+    'getUser',
+    'getUserByEmail',
+    'getUserByAccount',
+    'updateUser',
+    'deleteUser',
+    'linkAccount',
+    'unlinkAccount',
+    'getAccount',
+    'createSession',
+    'getSessionAndUser',
+    'updateSession',
+    'deleteSession',
+    'createVerificationToken',
+    'useVerificationToken',
+    'createAuthenticator',
+    'getAuthenticator',
+    'listAuthenticatorsByUserId',
+    'updateAuthenticatorCounter',
+  ] satisfies (keyof Adapter)[];
+  return Object.fromEntries(
+    methods.map((method) => [
+      method,
+      (...args: unknown[]) =>
+        (getAdapter()[method] as (...a: unknown[]) => unknown)(...args),
+    ]),
+  ) as Adapter;
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
