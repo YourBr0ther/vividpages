@@ -1,10 +1,11 @@
 import { getQueue } from '@vividpages/core/queues';
 import { books, characters, getDb, pipelineRuns, scenes } from '@vividpages/db';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { auth } from '@/auth';
+import { isUniqueViolation } from '@/lib/db-errors';
 import { findOwnedBook } from '@/lib/find-owned-book';
 import { getLatestRun, isActiveRun } from '@/lib/queries';
 
@@ -30,7 +31,13 @@ type RouteContext = { params: Promise<{ id: string }> };
  * Returns 202 `{ runId }`, or 409 when a run is already active. "Active"
  * means the latest run is 'running' AND wrote progress within the last 10
  * minutes — a stuck 'running' row older than that (crashed worker) is
- * treated as stale so the user can start over.
+ * treated as stale: it is marked failed ('superseded') and the user can
+ * start over.
+ *
+ * Concurrency: the isActiveRun() pre-check is a friendly fast path only. The
+ * authoritative gate is the `pipeline_runs_book_running_unique` partial
+ * unique index (one 'running' run per book) — a racing duplicate insert
+ * fails with a unique violation, which is mapped to the same 409.
  */
 export async function POST(request: NextRequest, { params }: RouteContext) {
   const session = await auth();
@@ -89,32 +96,56 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     }
   }
 
-  // Run row, book status, and any force-reset happen atomically so a failure
-  // can't leave a half-reset book or a status with no run behind it.
-  const { runId } = await db.transaction(async (tx) => {
-    if (action === 'analyze' && force) {
-      // Full cast rebuild: every scene gets re-analyzed and the character
-      // table is rebuilt from scratch (scene_characters cascade-deletes).
+  // Run row, book status, stale-run supersede, and any force-reset happen
+  // atomically so a failure can't leave a half-reset book or a status with
+  // no run behind it.
+  let runId: string;
+  try {
+    ({ runId } = await db.transaction(async (tx) => {
+      // The pre-check above decided no run is ACTIVE, but a stale 'running'
+      // row (crashed worker / evaporated job) may still exist; mark it
+      // failed so the partial unique index admits the new run and the runs
+      // history reads honestly.
       await tx
-        .update(scenes)
-        .set({ analysisStatus: 'pending' })
-        .where(eq(scenes.bookId, book.id));
-      await tx.delete(characters).where(eq(characters.bookId, book.id));
+        .update(pipelineRuns)
+        .set({ status: 'failed', error: 'superseded' })
+        .where(and(eq(pipelineRuns.bookId, book.id), eq(pipelineRuns.status, 'running')));
+
+      if (action === 'analyze' && force) {
+        // Full cast rebuild: every scene gets re-analyzed and the character
+        // table is rebuilt from scratch (scene_characters cascade-deletes).
+        await tx
+          .update(scenes)
+          .set({ analysisStatus: 'pending' })
+          .where(eq(scenes.bookId, book.id));
+        await tx.delete(characters).where(eq(characters.bookId, book.id));
+      }
+
+      const [run] = await tx
+        .insert(pipelineRuns)
+        .values({ bookId: book.id, stage: action, currentStep: 'Queued', status: 'running' })
+        .returning({ id: pipelineRuns.id });
+      if (!run) throw new Error('Pipeline run insert returned no row');
+
+      await tx
+        .update(books)
+        .set({ status: action === 'analyze' ? 'analyzing' : 'profiling', error: null })
+        .where(eq(books.id, book.id));
+
+      return { runId: run.id };
+    }));
+  } catch (error) {
+    // Authoritative concurrency gate: a racing request inserted its run
+    // first, so the partial unique index rejected ours. The transaction
+    // rolled back (including any force-reset), so nothing was disturbed.
+    if (isUniqueViolation(error)) {
+      return NextResponse.json(
+        { error: 'A pipeline run is already in progress for this book.' },
+        { status: 409 },
+      );
     }
-
-    const [run] = await tx
-      .insert(pipelineRuns)
-      .values({ bookId: book.id, stage: action, currentStep: 'Queued', status: 'running' })
-      .returning({ id: pipelineRuns.id });
-    if (!run) throw new Error('Pipeline run insert returned no row');
-
-    await tx
-      .update(books)
-      .set({ status: action === 'analyze' ? 'analyzing' : 'profiling', error: null })
-      .where(eq(books.id, book.id));
-
-    return { runId: run.id };
-  });
+    throw error;
+  }
 
   try {
     if (action === 'analyze') {

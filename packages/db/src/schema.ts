@@ -11,6 +11,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
   vector,
 } from 'drizzle-orm/pg-core';
@@ -358,7 +359,16 @@ export const pipelineRuns = pgTable(
     startedAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index('pipeline_runs_book_idx').on(t.bookId)],
+  (t) => [
+    index('pipeline_runs_book_idx').on(t.bookId),
+    // Concurrent-run fence: at most ONE 'running' run per book, enforced by
+    // the database (the API's friendly pre-check races; this doesn't). The
+    // accompanying migration (0002) first marks stale 'running' rows as
+    // failed ('superseded') so the index can build on existing data.
+    uniqueIndex('pipeline_runs_book_running_unique')
+      .on(t.bookId)
+      .where(sql`${t.status} = 'running'`),
+  ],
 );
 
 export const jobs = pgTable(

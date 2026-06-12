@@ -67,6 +67,21 @@ export function isTerminalStatus(status: BookStatus): boolean {
   return status === 'ready' || status === 'failed';
 }
 
+/**
+ * True when the book's text is on the shelf and readable. By the time a book
+ * reaches 'analyzing' its chapters and scenes are fully ingested, so the
+ * LLM stages (analyze/profile/imagine) only ENRICH a book the user can
+ * already read — re-analysis must not lock them out of it.
+ */
+export function isOpenableStatus(status: BookStatus): boolean {
+  return (
+    status === 'ready' ||
+    status === 'analyzing' ||
+    status === 'profiling' ||
+    status === 'imagining'
+  );
+}
+
 /** Friendly labels for in-flight statuses shown on the progress overlay. */
 export const STATUS_LABELS: Record<BookStatus, string> = {
   uploading: 'Uploading',

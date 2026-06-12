@@ -15,6 +15,13 @@
       "when": 1781271987097,
       "tag": "0001_cool_dreaming_celestial",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781293276401,
+      "tag": "0002_cloudy_nightshade",
+      "breakpoints": true
     }
   ]
 }

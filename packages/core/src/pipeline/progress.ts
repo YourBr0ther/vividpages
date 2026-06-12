@@ -1,5 +1,5 @@
 import { books, getDb, pipelineRuns, type BookStatus } from '@vividpages/db';
-import { eq, sql } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 
 /**
  * Progress bookkeeping for pipeline stages. All helpers write to Postgres;
@@ -51,6 +51,23 @@ export async function incrementRunTokens(
       tokensOut: sql`${pipelineRuns.tokensOut} + ${tokensOut}`,
     })
     .where(eq(pipelineRuns.id, runId));
+}
+
+/**
+ * True when `runId` is no longer the book's latest pipeline run — i.e. a
+ * newer run was started while this job sat in the queue (or was retrying).
+ * Stages MUST check this after loading the book and before any destructive
+ * write (and before reportProgress, which would flip a superseded run back to
+ * 'running' and trip the one-running-run-per-book unique index).
+ */
+export async function isRunSuperseded(bookId: string, runId: string): Promise<boolean> {
+  const [latest] = await getDb()
+    .select({ id: pipelineRuns.id })
+    .from(pipelineRuns)
+    .where(eq(pipelineRuns.bookId, bookId))
+    .orderBy(desc(pipelineRuns.startedAt))
+    .limit(1);
+  return latest !== undefined && latest.id !== runId;
 }
 
 export async function failRun(runId: string, error: string): Promise<void> {

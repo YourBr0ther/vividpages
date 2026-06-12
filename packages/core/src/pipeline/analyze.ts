@@ -15,7 +15,7 @@ import { candidateNames, findRosterMatch, splitCompoundName } from '../analysis/
 import { sceneAnalysisSchema, type SceneAnalysis } from '../analysis/schema';
 import { getQueue, type StageJobPayload } from '../queues';
 import { resolveLlm } from './llm';
-import { incrementRunTokens, reportProgress, setBookStatus } from './progress';
+import { incrementRunTokens, isRunSuperseded, reportProgress, setBookStatus } from './progress';
 
 /** OllamaError codes that indicate the whole stage cannot succeed. */
 const SYSTEMIC_OLLAMA_CODES = new Set(['NETWORK', 'TIMEOUT', 'MODEL_NOT_FOUND']);
@@ -228,11 +228,20 @@ async function persistSceneAnalysis(
 export async function runAnalyze({ bookId, runId }: StageJobPayload): Promise<void> {
   const db = getDb();
 
-  await setBookStatus(bookId, 'analyzing');
-  await reportProgress(runId, { stage: 'analyze', percent: 0, currentStep: 'Preparing analysis' });
-
   const book = await db.query.books.findFirst({ where: eq(books.id, bookId) });
   if (!book) throw new Error(`analyze: book ${bookId} not found`);
+
+  // runId fence: a newer run supersedes this job (it may have been waiting in
+  // the queue or retrying). Bail before ANY write — touching book status or
+  // reportProgress here would clobber the newer run's state, and this stage
+  // deletes/links character rows the newer run now owns.
+  if (await isRunSuperseded(bookId, runId)) {
+    console.log(`[analyze ${bookId}] run ${runId} superseded by a newer run; skipping`);
+    return;
+  }
+
+  await setBookStatus(bookId, 'analyzing');
+  await reportProgress(runId, { stage: 'analyze', percent: 0, currentStep: 'Preparing analysis' });
 
   const llm: LLM = await resolveLlm(db, book);
   const health = await llm.healthCheck();

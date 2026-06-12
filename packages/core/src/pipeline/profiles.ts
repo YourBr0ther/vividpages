@@ -21,7 +21,13 @@ import {
 } from '../characters/dedupe';
 import type { ProfilesJobPayload } from '../queues';
 import { resolveEmbedder, resolveLlm } from './llm';
-import { completeRun, incrementRunTokens, reportProgress, setBookStatus } from './progress';
+import {
+  completeRun,
+  incrementRunTokens,
+  isRunSuperseded,
+  reportProgress,
+  setBookStatus,
+} from './progress';
 
 /** OllamaError codes that indicate the whole stage cannot succeed. */
 const SYSTEMIC_OLLAMA_CODES = new Set(['NETWORK', 'TIMEOUT', 'MODEL_NOT_FOUND']);
@@ -278,15 +284,24 @@ export async function runProfiles(payload: ProfilesJobPayload): Promise<void> {
   const db = getDb();
   const log = (msg: string) => console.log(`[profiles ${bookId}] ${msg}`);
 
+  const book = await db.query.books.findFirst({ where: eq(books.id, bookId) });
+  if (!book) throw new Error(`profiles: book ${bookId} not found`);
+
+  // runId fence: a newer run supersedes this job. Bail before ANY write —
+  // this stage merges/deletes character rows the newer run now owns, and
+  // reportProgress on a superseded run would trip the one-running-run-per-
+  // book unique index.
+  if (await isRunSuperseded(bookId, runId)) {
+    log(`run ${runId} superseded by a newer run; skipping`);
+    return;
+  }
+
   await setBookStatus(bookId, 'profiling');
   await reportProgress(runId, {
     stage: 'profiles',
     percent: 0,
     currentStep: 'Preparing character profiles',
   });
-
-  const book = await db.query.books.findFirst({ where: eq(books.id, bookId) });
-  if (!book) throw new Error(`profiles: book ${bookId} not found`);
 
   const llm: LLM = await resolveLlm(db, book);
   const health = await llm.healthCheck();
