@@ -48,7 +48,7 @@ describe('getEnv', () => {
     const env = getEnv();
     expect(env.REDIS_URL).toBe('redis://localhost:6379');
     expect(env.OLLAMA_URL).toBe('http://10.0.2.192:11434');
-    expect(env.COMFYUI_URL).toBe('http://10.0.2.192:8188');
+    expect(env.COMFYUI_URL).toBe('http://10.0.2.192:8000');
     expect(env.WORKER_CONCURRENCY_INGEST).toBe(2);
     expect(env.WORKER_CONCURRENCY_SEGMENT).toBe(2);
     expect(env.WORKER_CONCURRENCY_ANALYZE).toBe(1);

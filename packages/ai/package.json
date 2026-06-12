@@ -9,7 +9,9 @@
     "./llm/ollama": "./src/llm/ollama.ts",
     "./embed/types": "./src/embed/types.ts",
     "./embed/ollama": "./src/embed/ollama.ts",
-    "./structured": "./src/structured.ts"
+    "./structured": "./src/structured.ts",
+    "./image/types": "./src/image/types.ts",
+    "./image/comfyui": "./src/image/comfyui.ts"
   },
   "scripts": {
     "test": "vitest run"

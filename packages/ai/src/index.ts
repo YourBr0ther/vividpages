@@ -8,3 +8,15 @@ export {
   type StructuredOptions,
   type StructuredResult,
 } from './structured';
+export type { GenerateOptions, ImageGen, ImageResult } from './image/types';
+export {
+  ComfyUIError,
+  ComfyUIImageGen,
+  patchWorkflow,
+  randomSeed,
+  ZIMAGE_T2I_TEMPLATE,
+  type ComfyUIImageGenOptions,
+  type PatchParams,
+  type WorkflowGraph,
+  type WorkflowNode,
+} from './image/comfyui';

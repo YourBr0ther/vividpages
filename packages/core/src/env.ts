@@ -17,7 +17,7 @@ const envSchema = z.object({
   MINIO_ACCESS_KEY: z.string().min(1),
   MINIO_SECRET_KEY: z.string().min(1),
   OLLAMA_URL: z.url().default('http://10.0.2.192:11434'),
-  COMFYUI_URL: z.url().default('http://10.0.2.192:8188'),
+  COMFYUI_URL: z.url().default('http://10.0.2.192:8000'),
   AUTH_SECRET: z.string().min(16, { error: 'must be at least 16 characters' }),
   ENCRYPTION_KEY: z
     .string()
