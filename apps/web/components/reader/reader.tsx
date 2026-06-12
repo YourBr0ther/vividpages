@@ -146,6 +146,20 @@ export function Reader({
     [putProgress],
   );
 
+  // Flush on hard tab close/reload too, where unmount cleanup never runs.
+  // Documented choice: keepalive fetch over navigator.sendBeacon — keepalive
+  // requests outlive the page just like beacons, but keep the PUT verb (the
+  // progress route has no POST handler) and the JSON content type.
+  useEffect(() => {
+    function onPageHide() {
+      if (!savePendingRef.current) return;
+      clearTimeout(saveTimerRef.current);
+      putProgress();
+    }
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
+  }, [putProgress]);
+
   // ---- Chapter navigation --------------------------------------------------
 
   const showChapter = useCallback(
@@ -163,6 +177,10 @@ export function Reader({
     async (idx: number) => {
       setPickerOpen(false);
       if (idx === chapterIdxRef.current || !chapters.some((c) => c.idx === idx)) return;
+      // Bump the sequence on EVERY navigation (not just fetches): a slow
+      // in-flight fetch for chapter A must not stomp a cached chapter B
+      // shown synchronously after it.
+      const seq = ++fetchSeqRef.current;
       restoreSceneRef.current = null;
       // Shallow URL sync (Next.js tracks native replaceState): no scroll
       // jank, no server round-trip for a chapter we fetch/cached ourselves.
@@ -176,7 +194,6 @@ export function Reader({
 
       setLoading(true);
       setLoadError(null);
-      const seq = ++fetchSeqRef.current;
       try {
         const res = await fetch(`/api/books/${bookId}/content?chapter=${idx}`);
         if (!res.ok) throw new Error(`content fetch failed: ${res.status}`);

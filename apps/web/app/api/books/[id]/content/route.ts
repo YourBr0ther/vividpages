@@ -35,7 +35,10 @@ export async function GET(request: Request, { params }: RouteContext) {
 
   const chapterParam = new URL(request.url).searchParams.get('chapter');
   if (chapterParam !== null) {
-    const chapterIdx = Number(chapterParam);
+    // Present-but-invalid is a 400, including the empty string (which
+    // Number() would otherwise silently coerce to 0), NaN, negatives and
+    // non-integers.
+    const chapterIdx = chapterParam.trim() === '' ? Number.NaN : Number(chapterParam);
     if (!Number.isInteger(chapterIdx) || chapterIdx < 0) {
       return NextResponse.json({ error: 'Invalid chapter index.' }, { status: 400 });
     }
