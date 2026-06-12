@@ -1,0 +1,22 @@
+{
+  "name": "worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "test": "echo \"no tests yet\""
+  },
+  "dependencies": {
+    "@vividpages/core": "workspace:*",
+    "@vividpages/db": "workspace:*",
+    "bullmq": "^5.0.0",
+    "dotenv": "^16.4.5",
+    "tsx": "^4.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.8.3"
+  }
+}
