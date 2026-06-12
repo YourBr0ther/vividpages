@@ -1,4 +1,4 @@
-import { OllamaEmbedder, OllamaLLM } from '@vividpages/ai';
+import { ComfyUIImageGen, OllamaEmbedder, OllamaLLM } from '@vividpages/ai';
 import { userSettings, type Db } from '@vividpages/db';
 import { eq } from 'drizzle-orm';
 
@@ -9,6 +9,7 @@ const DEFAULT_LLM_PROVIDER = 'ollama';
 const DEFAULT_LLM_MODEL = 'llama3.1:8b';
 const DEFAULT_EMBEDDING_PROVIDER = 'ollama';
 const DEFAULT_EMBEDDING_MODEL = 'nomic-embed-text';
+const DEFAULT_IMAGE_PROVIDER = 'comfyui';
 
 /**
  * Resolves the LLM for a book: book columns -> owner's user_settings -> env
@@ -50,4 +51,27 @@ export async function resolveEmbedder(db: Db, userId: string): Promise<OllamaEmb
   }
   const baseUrl = settings?.ollamaUrl || getEnv().OLLAMA_URL;
   return new OllamaEmbedder({ baseUrl, model });
+}
+
+/**
+ * Resolves the image generator for a book: book column -> owner's
+ * user_settings -> env default. Only ComfyUI is wired up here; cloud image
+ * providers (DALL-E) arrive in M6 (T27).
+ */
+export async function resolveImageGen(
+  db: Db,
+  book: { userId: string; imageProvider: string | null },
+): Promise<ComfyUIImageGen> {
+  const settings = await db.query.userSettings.findFirst({
+    where: eq(userSettings.userId, book.userId),
+  });
+  const provider = book.imageProvider ?? settings?.imageProvider ?? DEFAULT_IMAGE_PROVIDER;
+  if (provider !== 'comfyui') {
+    throw new Error(
+      `pipeline: image provider '${provider}' is not yet supported — ` +
+        `only 'comfyui' is wired up (cloud image providers land in M6).`,
+    );
+  }
+  const baseUrl = settings?.comfyuiUrl || getEnv().COMFYUI_URL;
+  return new ComfyUIImageGen({ baseUrl });
 }

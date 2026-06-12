@@ -26,6 +26,7 @@ import {
   type Worker,
 } from '@vividpages/core';
 import { runAnalyze } from '@vividpages/core/pipeline/analyze';
+import { runImagine } from '@vividpages/core/pipeline/imagine';
 import { runIngest } from '@vividpages/core/pipeline/ingest';
 import { failRun, setBookStatus } from '@vividpages/core/pipeline/progress';
 import { runProfiles } from '@vividpages/core/pipeline/profiles';
@@ -45,12 +46,12 @@ const concurrency: Record<QueueName, number> = {
   imagine: env.WORKER_CONCURRENCY_IMAGINE,
 };
 
-// Real pipeline stages; imagine remains a stub until M5.
 const stageFns: Partial<Record<QueueName, (payload: StageJobPayload) => Promise<void>>> = {
   ingest: runIngest,
   segment: runSegment,
   analyze: runAnalyze,
   profiles: runProfiles,
+  imagine: runImagine,
 };
 
 const workers: Worker[] = (Object.keys(QUEUE) as QueueName[]).map((name) => {

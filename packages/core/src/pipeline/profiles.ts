@@ -590,7 +590,9 @@ export async function runProfiles(payload: ProfilesJobPayload): Promise<void> {
     percent: 100,
     currentStep: 'Character profiles complete',
   });
-  // M5: enqueue imagine here instead of completing the run.
+  // Imagine is deliberately NOT chained here: art generation is long
+  // (~15s/image x portraits + every scene) so the user triggers it
+  // explicitly from the pipeline card once they've reviewed the cast.
   await setBookStatus(bookId, 'ready');
   await completeRun(runId);
 }

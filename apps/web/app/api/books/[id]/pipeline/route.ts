@@ -10,16 +10,23 @@ import { findOwnedBook } from '@/lib/find-owned-book';
 import { getLatestRun, isActiveRun } from '@/lib/queries';
 
 const bodySchema = z.object({
-  action: z.enum(['analyze', 'profiles']),
+  action: z.enum(['analyze', 'profiles', 'imagine']),
   force: z.boolean().optional().default(false),
 });
+
+/** Book status / pipeline stage per action while the run is queued. */
+const ACTION_STAGE = {
+  analyze: { status: 'analyzing', stage: 'analyze' },
+  profiles: { status: 'profiling', stage: 'profiles' },
+  imagine: { status: 'imagining', stage: 'imagine' },
+} as const;
 
 type RouteContext = { params: Promise<{ id: string }> };
 
 /**
  * POST /api/books/[id]/pipeline — start a pipeline run for an owned book.
  *
- * Body: `{ action: 'analyze' | 'profiles', force?: boolean }`.
+ * Body: `{ action: 'analyze' | 'profiles' | 'imagine', force?: boolean }`.
  *
  * - `analyze`: re-enters the pipeline at scene analysis (which chains into
  *   profiles when it finishes). Resume-style by default — scenes already
@@ -27,6 +34,8 @@ type RouteContext = { params: Promise<{ id: string }> };
  *   the book's characters are deleted first: a full cast rebuild.
  * - `profiles`: re-runs only the profiles stage (dedup + visual profiles);
  *   `force` recomputes characters that are already profiled.
+ * - `imagine`: generates art — character portraits + scene storyboards.
+ *   Resume-style: subjects that already have a finished image are skipped.
  *
  * Returns 202 `{ runId }`, or 409 when a run is already active. "Active"
  * means the latest run is 'running' AND wrote progress within the last 10
@@ -83,7 +92,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
         { status: 409 },
       );
     }
-  } else {
+  } else if (action === 'profiles') {
     const [row] = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(characters)
@@ -91,6 +100,17 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     if ((row?.count ?? 0) === 0) {
       return NextResponse.json(
         { error: 'No characters to profile yet — run analysis first.' },
+        { status: 409 },
+      );
+    }
+  } else {
+    const [row] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(scenes)
+      .where(and(eq(scenes.bookId, book.id), eq(scenes.analysisStatus, 'done')));
+    if ((row?.count ?? 0) === 0) {
+      return NextResponse.json(
+        { error: 'No analyzed scenes to illustrate yet — run analysis first.' },
         { status: 409 },
       );
     }
@@ -123,13 +143,18 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
 
       const [run] = await tx
         .insert(pipelineRuns)
-        .values({ bookId: book.id, stage: action, currentStep: 'Queued', status: 'running' })
+        .values({
+          bookId: book.id,
+          stage: ACTION_STAGE[action].stage,
+          currentStep: 'Queued',
+          status: 'running',
+        })
         .returning({ id: pipelineRuns.id });
       if (!run) throw new Error('Pipeline run insert returned no row');
 
       await tx
         .update(books)
-        .set({ status: action === 'analyze' ? 'analyzing' : 'profiling', error: null })
+        .set({ status: ACTION_STAGE[action].status, error: null })
         .where(eq(books.id, book.id));
 
       return { runId: run.id };
@@ -150,8 +175,10 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
   try {
     if (action === 'analyze') {
       await getQueue('analyze').add('analyze', { bookId: book.id, runId });
-    } else {
+    } else if (action === 'profiles') {
       await getQueue('profiles').add('profiles', { bookId: book.id, runId, force });
+    } else {
+      await getQueue('imagine').add('imagine', { bookId: book.id, runId });
     }
   } catch (error) {
     // Same honest-failure bookkeeping as the upload route: never leave the

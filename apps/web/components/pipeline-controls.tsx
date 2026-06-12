@@ -9,7 +9,7 @@ import { useBookProgress } from '@/lib/use-book-progress';
 
 import { ConfirmDialog } from './confirm-dialog';
 
-type PipelineAction = 'analyze' | 'profiles';
+type PipelineAction = 'analyze' | 'profiles' | 'imagine';
 
 interface PipelineControlsProps {
   bookId: string;
@@ -22,6 +22,8 @@ interface PipelineControlsProps {
   analyzedScenes: number;
   totalScenes: number;
   characterCount: number;
+  /** Characters eligible for a portrait (significant role + appearance token). */
+  portraitCount: number;
   /** Resolved provider/model (book → user settings → defaults), display-only. */
   provider: string;
   model: string;
@@ -43,18 +45,46 @@ function idleCopy(props: PipelineControlsProps): string {
   return `${scenes} · ${characterCount} character${characterCount === 1 ? '' : 's'} catalogued.`;
 }
 
-const CONFIRM_COPY: Record<PipelineAction, { title: string; body: string; confirm: string }> = {
-  analyze: {
+/** Rough per-image wall-clock for the art-time estimate. */
+const SECONDS_PER_IMAGE = 15;
+
+/** '~3 minutes' / '~45 seconds' for n images at ~15s each. */
+function artTimeEstimate(imageCount: number): string {
+  const seconds = imageCount * SECONDS_PER_IMAGE;
+  if (seconds < 90) return `~${seconds} seconds`;
+  return `~${Math.ceil(seconds / 60)} minutes`;
+}
+
+function confirmCopy(
+  action: PipelineAction,
+  props: PipelineControlsProps,
+): { title: string; body: string; confirm: string } {
+  if (action === 'imagine') {
+    const { portraitCount, analyzedScenes } = props;
+    const total = portraitCount + analyzedScenes;
+    return {
+      title: 'Generate the artwork?',
+      body:
+        `This will paint about ${portraitCount} character portrait${portraitCount === 1 ? '' : 's'} ` +
+        `and ${analyzedScenes} scene illustration${analyzedScenes === 1 ? '' : 's'} — ` +
+        `roughly ${artTimeEstimate(total)} at ~${SECONDS_PER_IMAGE}s per image. ` +
+        'Subjects that already have finished art are skipped.',
+      confirm: 'Generate art',
+    };
+  }
+  if (action === 'profiles') {
+    return {
+      title: 'Rebuild the character profiles?',
+      body: 'Profiles, roles, and appearance tokens will be recomputed from the existing scene analysis, replacing the current ones.',
+      confirm: 'Rebuild',
+    };
+  }
+  return {
     title: 'Re-run the analysis?',
     body: 'Re-analysis will rebuild scene insights and the cast from scratch. This reads the whole book again and can take a while.',
     confirm: 'Re-analyze',
-  },
-  profiles: {
-    title: 'Rebuild the character profiles?',
-    body: 'Profiles, roles, and appearance tokens will be recomputed from the existing scene analysis, replacing the current ones.',
-    confirm: 'Rebuild',
-  },
-};
+  };
+}
 
 /**
  * The 'Analysis & illustration' card: stage-appropriate status copy, live SSE
@@ -91,7 +121,8 @@ export function PipelineControls(props: PipelineControlsProps) {
     setPosting(true);
     setError(null);
     try {
-      const force = action === 'profiles' || analyzedScenes > 0;
+      const force =
+        action === 'profiles' || (action === 'analyze' && analyzedScenes > 0);
       const res = await fetch(`/api/books/${bookId}/pipeline`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -204,6 +235,17 @@ export function PipelineControls(props: PipelineControlsProps) {
             Rebuild profiles
           </button>
         ) : null}
+        {analyzedScenes > 0 ? (
+          <button
+            type="button"
+            onClick={() => setConfirming('imagine')}
+            disabled={buttonsDisabled || status !== 'ready'}
+            title={status !== 'ready' ? 'Available once the book is ready' : undefined}
+            className="rounded-full border border-stone-700 px-4 py-1.5 text-sm text-stone-300 transition hover:border-stone-600 hover:text-parchment focus-visible:ring-2 focus-visible:ring-ember-400/70 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Generate art
+          </button>
+        ) : null}
       </div>
 
       {/* Provider/model slot: read-only until the T28 settings UI lands. */}
@@ -218,9 +260,9 @@ export function PipelineControls(props: PipelineControlsProps) {
 
       {confirming ? (
         <ConfirmDialog
-          title={CONFIRM_COPY[confirming].title}
-          body={CONFIRM_COPY[confirming].body}
-          confirmLabel={CONFIRM_COPY[confirming].confirm}
+          title={confirmCopy(confirming, props).title}
+          body={confirmCopy(confirming, props).body}
+          confirmLabel={confirmCopy(confirming, props).confirm}
           busyLabel="Starting…"
           busy={posting}
           onConfirm={() => void start(confirming)}

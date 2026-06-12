@@ -64,6 +64,10 @@ export default async function BookDetailPage({ params }: PageProps) {
     resolveLlmDisplay(userId, book),
   ]);
   const sceneCount = chapters.reduce((total, chapter) => total + chapter.sceneCount, 0);
+  // Mirrors the imagine stage's portrait plan: significant roles with a token.
+  const portraitCount = cast.filter(
+    (member) => member.appearanceToken !== null && member.role !== 'minor',
+  ).length;
   const readable = chapters.length > 0;
   const continueChapter = progress
     ? chapters.find((chapter) => chapter.idx === progress.chapterIdx)
@@ -172,6 +176,7 @@ export default async function BookDetailPage({ params }: PageProps) {
             analyzedScenes={analyzedScenes}
             totalScenes={sceneCount}
             characterCount={cast.length}
+            portraitCount={portraitCount}
             provider={llm.provider}
             model={llm.model}
           />
