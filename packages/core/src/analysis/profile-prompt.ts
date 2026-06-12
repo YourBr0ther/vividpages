@@ -96,6 +96,7 @@ export function buildProfilePrompt(args: ProfilePromptArgs): { system: string; p
     '',
     'Build the single canonical VISUAL profile for this character — how they look on a NORMAL day, not in one specific scene. Field hints:',
     '- hair/eyes/skin/build/age/attire/distinguishing: PHYSICAL traits only, merged across all notes (later notes refine earlier ones). Use null for any trait the text never describes — do NOT invent details.',
+    '- State traits plainly; omit uncertain ones; never add commentary or qualifiers (no "possibly", "implied", "not specified", or parenthetical notes — use null instead).',
     '- attire: the typical/default outfit, not one-scene costumes.',
     '- distinguishing: PERMANENT identifying features only — scars that last, tattoos, props always carried. EXCLUDE temporary states: fresh injuries, blood, dirt, bruises, wet clothes, one-scene accessories.',
     "- role: the character's narrative importance — 'protagonist' (the single central point-of-view character; a book has at most one or two), 'antagonist' (the main opposing character), 'supporting' (recurring companions, family, colleagues), or 'minor' (a scene or two). The scene-appearance count above is the strongest hint.",

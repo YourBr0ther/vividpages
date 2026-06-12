@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { buildProfilePrompt, type ProfileMention } from '../analysis/profile-prompt';
 import { characterProfileSchema, type CharacterProfile } from '../analysis/profile-schema';
 import { nameKey, normalizeCharacterName } from '../analysis/roster';
-import { compileAppearanceToken } from '../characters/appearance';
+import { compileAppearanceToken, sanitizeTraitValue } from '../characters/appearance';
 import {
   DEFAULT_SIMILARITY_THRESHOLD,
   buildEmbeddingText,
@@ -232,36 +232,21 @@ function clampRole(
 }
 
 /**
- * Empty / placeholder trait strings from the LLM are normalized to null.
- * Includes hint-echo placeholders the model copies back out of the prompt
- * ('typical default outfit') instead of leaving the field null.
+ * Trait hygiene lives in sanitizeTraitValue (characters/appearance.ts):
+ * nullish/placeholder echoes ('typical/default outfit (not specified)'),
+ * hedging commentary ('possibly … (implied)'), and degenerate bare color
+ * adjectives are all normalized to null before the profile is stored.
  */
-const NULLISH_TRAITS = new Set([
-  '',
-  'null',
-  'none',
-  'unknown',
-  'n/a',
-  'not described',
-  'not specified',
-  'default outfit',
-  'typical default outfit',
-]);
-
 function normalizeProfile(profile: CharacterProfile): CharacterProfile {
-  const clean = (v: string | null): string | null => {
-    const t = v?.trim() ?? '';
-    return NULLISH_TRAITS.has(t.toLowerCase()) ? null : t;
-  };
   return {
     ...profile,
-    hair: clean(profile.hair),
-    eyes: clean(profile.eyes),
-    skin: clean(profile.skin),
-    build: clean(profile.build),
-    age: clean(profile.age),
-    attire: clean(profile.attire),
-    distinguishing: clean(profile.distinguishing),
+    hair: sanitizeTraitValue(profile.hair, 'hair'),
+    eyes: sanitizeTraitValue(profile.eyes, 'eyes'),
+    skin: sanitizeTraitValue(profile.skin, 'skin'),
+    build: sanitizeTraitValue(profile.build, 'build'),
+    age: sanitizeTraitValue(profile.age, 'age'),
+    attire: sanitizeTraitValue(profile.attire, 'attire'),
+    distinguishing: sanitizeTraitValue(profile.distinguishing, 'distinguishing'),
     oneLine: profile.oneLine.trim(),
   };
 }
