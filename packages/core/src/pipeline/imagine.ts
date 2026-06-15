@@ -1,8 +1,17 @@
-import { isImageProviderError, isSystemicImageError, type ImageGen } from '@vividpages/ai';
+import {
+  OllamaError,
+  StructuredOutputError,
+  isImageProviderError,
+  isSystemicImageError,
+  type ImageGen,
+  type LLM,
+} from '@vividpages/ai';
 import {
   books,
+  chapters,
   characters,
   getDb,
+  illustrationPoints,
   images,
   sceneCharacters,
   scenes,
@@ -10,11 +19,14 @@ import {
   type Db,
   type ImageKind,
 } from '@vividpages/db';
-import { and, asc, desc, eq, isNotNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull } from 'drizzle-orm';
 import sharp from 'sharp';
 
 import { characterProfileSchema, type CharacterProfile } from '../analysis/profile-schema';
 import { APPEARANCE_FIELD_ORDER, sanitizeTraitValue } from '../characters/appearance';
+import { imagesPerChapter } from '../illustration/count';
+import { isNonNarrative } from '../illustration/exclude';
+import { planChapterIllustrations, type PlanRosterMember } from '../illustration/plan';
 import {
   buildPortraitPrompt,
   buildScenePrompt,
@@ -22,9 +34,15 @@ import {
 } from '../imaging/prompt';
 import type { ImagineJobPayload } from '../queues';
 import { redactSecrets } from '../redact';
-import { putObject } from '../storage';
-import { resolveImageGen } from './llm';
-import { completeRun, isRunSuperseded, reportProgress, setBookStatus } from './progress';
+import { deleteObject, putObject } from '../storage';
+import { resolveImageGen, resolveLlm } from './llm';
+import {
+  completeRun,
+  incrementRunTokens,
+  isRunSuperseded,
+  reportProgress,
+  setBookStatus,
+} from './progress';
 
 /**
  * A home GPU box blips: a single dropped health ping or one slow generation is
@@ -42,6 +60,12 @@ const HEALTH_CHECK_BACKOFF_MS = 10_000;
 
 /** If the first this-many generations ALL fail (e.g. bad prompts), bail early. */
 const EARLY_FAILURE_WINDOW = 5;
+
+/** OllamaError codes that indicate the LLM planning pass cannot succeed at all. */
+const SYSTEMIC_OLLAMA_CODES = new Set(['NETWORK', 'TIMEOUT', 'MODEL_NOT_FOUND']);
+
+/** Phase 0 owns the first slice of the progress bar; Phase 1 the remainder. */
+const PLANNING_PERCENT_END = 25;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -122,7 +146,10 @@ async function loadPortraitCharacters(db: Db, bookId: string): Promise<PortraitC
 
 interface SceneRow {
   id: string;
+  chapterId: string;
   globalIdx: number;
+  startOffset: number;
+  endOffset: number;
   summary: string | null;
   setting: string | null;
   timeOfDay: string | null;
@@ -135,7 +162,10 @@ async function loadAnalyzedScenes(db: Db, bookId: string): Promise<SceneRow[]> {
   return db
     .select({
       id: scenes.id,
+      chapterId: scenes.chapterId,
       globalIdx: scenes.globalIdx,
+      startOffset: scenes.startOffset,
+      endOffset: scenes.endOffset,
       summary: scenes.summary,
       setting: scenes.setting,
       timeOfDay: scenes.timeOfDay,
@@ -147,35 +177,264 @@ async function loadAnalyzedScenes(db: Db, bookId: string): Promise<SceneRow[]> {
     .orderBy(asc(scenes.globalIdx));
 }
 
+/** Setting/mood/timeOfDay borrowed from an analyzed scene for a point's prompt. */
+export interface SceneContext {
+  setting: string | null;
+  timeOfDay: string | null;
+  mood: string | null;
+}
+
+const EMPTY_SCENE_CONTEXT: SceneContext = { setting: null, timeOfDay: null, mood: null };
+
 /**
- * sceneId -> up to SCENE_CAST_LIMIT present characters, ordered by overall
- * character prominence (sceneCount desc) so the leads are described first.
+ * Resolves the setting/mood/timeOfDay for an illustration point. Points are
+ * placed by char offset, decoupled from scene boundaries, so we borrow the
+ * atmosphere from the analyzed scene that *contains* the offset within the same
+ * chapter. Fallbacks, in order: containing scene → the chapter's first analyzed
+ * scene → empty context (all nulls). Pure (no IO) so it is unit-testable.
+ *
+ * `chapterScenes` must already be filtered to the point's chapter (any order).
  */
-async function loadSceneCasts(db: Db, bookId: string): Promise<Map<string, CharacterForPrompt[]>> {
+export function sceneContextForOffset(
+  chapterScenes: Array<{
+    startOffset: number;
+    endOffset: number;
+    setting: string | null;
+    timeOfDay: string | null;
+    mood: string | null;
+  }>,
+  charOffset: number,
+): SceneContext {
+  if (chapterScenes.length === 0) return EMPTY_SCENE_CONTEXT;
+  const containing = chapterScenes.find(
+    (s) => charOffset >= s.startOffset && charOffset < s.endOffset,
+  );
+  // Fallback to the chapter's first scene (lowest startOffset) when the offset
+  // lands in no scene span (e.g. a gap, or a quote located in trailing text).
+  const first = chapterScenes.reduce((a, b) => (a.startOffset <= b.startOffset ? a : b));
+  const src = containing ?? first;
+  return { setting: src.setting, timeOfDay: src.timeOfDay, mood: src.mood };
+}
+
+/**
+ * A scene reduced to the fields needed to derive a fallback illustration point.
+ * `startOffset` is already a paragraph-start char offset into the chapter text.
+ */
+export interface FallbackScene {
+  startOffset: number;
+  keyVisualMoment: string | null;
+  summary: string | null;
+  /** Resolved roster character ids present in the scene. */
+  presentCharacterIds: string[];
+}
+
+/** A scene-derived fallback point (the same shape persisted for LLM points). */
+export interface FallbackPoint {
+  idx: number;
+  charOffset: number;
+  anchorQuote: string;
+  momentDescription: string;
+  presentCharacterIds: string[];
+  score: number;
+}
+
+/** Low default score for scene-derived points (LLM importance is 1–5). */
+const SCENE_FALLBACK_SCORE = 1;
+
+/**
+ * Builds up to `maxMoments` illustration points from a chapter's analyzed
+ * scenes, used when the LLM planner returns ZERO points for a narrative chapter
+ * so the chapter still gets art. Pure (no IO) and unit-tested.
+ *
+ * Each point's `momentDescription` is the scene's `keyVisualMoment` (else its
+ * `summary`); scenes with neither are dropped. `charOffset` is the scene's
+ * paragraph-start `startOffset`; `presentCharacterIds` are the scene's resolved
+ * characters; `score` is a low default. When there are more usable scenes than
+ * `maxMoments` the selection is spread evenly across them (endpoints kept);
+ * with fewer, every usable scene is used. Points get contiguous `idx` sorted by
+ * `charOffset`. Uses NO LLM call.
+ */
+export function sceneFallbackPoints(
+  scenes: FallbackScene[],
+  maxMoments: number,
+): FallbackPoint[] {
+  const usable = scenes
+    .map((s) => ({ ...s, desc: s.keyVisualMoment ?? s.summary }))
+    .filter((s): s is FallbackScene & { desc: string } => s.desc != null && s.desc.length > 0);
+  if (usable.length === 0 || maxMoments <= 0) return [];
+
+  // Evenly spread the selection when there are more scenes than slots; keep the
+  // endpoints. Otherwise use every usable scene.
+  let selected: Array<FallbackScene & { desc: string }>;
+  if (usable.length <= maxMoments) {
+    selected = usable;
+  } else if (maxMoments === 1) {
+    selected = [usable[0] as FallbackScene & { desc: string }];
+  } else {
+    const picked = new Set<number>();
+    for (let i = 0; i < maxMoments; i++) {
+      picked.add(Math.round((i / (maxMoments - 1)) * (usable.length - 1)));
+    }
+    selected = [...picked].sort((a, b) => a - b).map((i) => usable[i] as FallbackScene & { desc: string });
+  }
+
+  return selected
+    .slice()
+    .sort((a, b) => a.startOffset - b.startOffset)
+    .map((s, idx) => ({
+      idx,
+      charOffset: s.startOffset,
+      anchorQuote: '',
+      momentDescription: s.desc,
+      presentCharacterIds: s.presentCharacterIds,
+      score: SCENE_FALLBACK_SCORE,
+    }));
+}
+
+interface IllustrationPointRow {
+  id: string;
+  chapterId: string;
+  idx: number;
+  charOffset: number;
+  momentDescription: string;
+  presentCharacterIds: string[];
+}
+
+/** Planned illustration points for the book, ordered for stable generation. */
+async function loadIllustrationPoints(db: Db, bookId: string): Promise<IllustrationPointRow[]> {
+  return db
+    .select({
+      id: illustrationPoints.id,
+      chapterId: illustrationPoints.chapterId,
+      idx: illustrationPoints.idx,
+      charOffset: illustrationPoints.charOffset,
+      momentDescription: illustrationPoints.momentDescription,
+      presentCharacterIds: illustrationPoints.presentCharacterIds,
+    })
+    .from(illustrationPoints)
+    .where(eq(illustrationPoints.bookId, bookId))
+    .orderBy(asc(illustrationPoints.chapterId), asc(illustrationPoints.idx));
+}
+
+/**
+ * Loads the prompt cast for an illustration point: the present-character rows,
+ * sanitized for prompting, capped at SCENE_CAST_LIMIT and ordered by overall
+ * prominence (sceneCount desc) so the leads are described first.
+ */
+async function loadPointCast(
+  db: Db,
+  bookId: string,
+  characterIds: string[],
+): Promise<CharacterForPrompt[]> {
+  if (characterIds.length === 0) return [];
   const rows = await db
     .select({
-      sceneId: sceneCharacters.sceneId,
+      id: characters.id,
       name: characters.name,
       appearanceToken: characters.appearanceToken,
       profile: characters.profile,
     })
-    .from(sceneCharacters)
-    .innerJoin(scenes, eq(sceneCharacters.sceneId, scenes.id))
-    .innerJoin(characters, eq(sceneCharacters.characterId, characters.id))
-    .where(eq(scenes.bookId, bookId))
+    .from(characters)
+    .where(and(eq(characters.bookId, bookId), inArray(characters.id, characterIds)))
     .orderBy(desc(characters.sceneCount), asc(characters.createdAt));
-  const bySceneId = new Map<string, CharacterForPrompt[]>();
-  for (const row of rows) {
-    const cast = bySceneId.get(row.sceneId) ?? [];
-    if (cast.length >= SCENE_CAST_LIMIT) continue;
-    cast.push({
-      name: row.name,
-      appearanceToken: row.appearanceToken,
-      profile: sanitizedProfile(row.profile),
-    });
-    bySceneId.set(row.sceneId, cast);
+  return rows.slice(0, SCENE_CAST_LIMIT).map((r) => ({
+    name: r.name,
+    appearanceToken: r.appearanceToken,
+    profile: sanitizedProfile(r.profile),
+  }));
+}
+
+interface ChapterRow {
+  id: string;
+  idx: number;
+  title: string | null;
+  text: string;
+  wordCount: number | null;
+}
+
+/** Chapters in reading order, with the text + word count the planner needs. */
+async function loadChapters(db: Db, bookId: string): Promise<ChapterRow[]> {
+  return db
+    .select({
+      id: chapters.id,
+      idx: chapters.idx,
+      title: chapters.title,
+      text: chapters.text,
+      wordCount: chapters.wordCount,
+    })
+    .from(chapters)
+    .where(eq(chapters.bookId, bookId))
+    .orderBy(asc(chapters.idx));
+}
+
+/**
+ * Per-chapter analyzed scenes (with their resolved present-character ids) used
+ * to derive fallback illustration points when the planner returns zero. Keyed
+ * by chapterId, scenes in reading order (globalIdx asc). Only 'done' scenes.
+ */
+async function loadFallbackScenesByChapter(
+  db: Db,
+  bookId: string,
+): Promise<Map<string, FallbackScene[]>> {
+  const sceneRows = await db
+    .select({
+      id: scenes.id,
+      chapterId: scenes.chapterId,
+      globalIdx: scenes.globalIdx,
+      startOffset: scenes.startOffset,
+      summary: scenes.summary,
+      keyVisualMoment: scenes.keyVisualMoment,
+    })
+    .from(scenes)
+    .where(and(eq(scenes.bookId, bookId), eq(scenes.analysisStatus, 'done')))
+    .orderBy(asc(scenes.globalIdx));
+
+  const sceneIds = sceneRows.map((s) => s.id);
+  const charsBySceneId = new Map<string, string[]>();
+  if (sceneIds.length > 0) {
+    const links = await db
+      .select({ sceneId: sceneCharacters.sceneId, characterId: sceneCharacters.characterId })
+      .from(sceneCharacters)
+      .where(inArray(sceneCharacters.sceneId, sceneIds));
+    for (const link of links) {
+      const list = charsBySceneId.get(link.sceneId) ?? [];
+      list.push(link.characterId);
+      charsBySceneId.set(link.sceneId, list);
+    }
   }
-  return bySceneId;
+
+  const byChapter = new Map<string, FallbackScene[]>();
+  for (const s of sceneRows) {
+    const list = byChapter.get(s.chapterId) ?? [];
+    list.push({
+      startOffset: s.startOffset,
+      keyVisualMoment: s.keyVisualMoment,
+      summary: s.summary,
+      presentCharacterIds: charsBySceneId.get(s.id) ?? [],
+    });
+    byChapter.set(s.chapterId, list);
+  }
+  return byChapter;
+}
+
+/** The planner's character roster: every character with an appearance token. */
+async function loadRoster(db: Db, bookId: string): Promise<PlanRosterMember[]> {
+  const rows = await db
+    .select({
+      id: characters.id,
+      name: characters.name,
+      aliases: characters.aliases,
+      profile: characters.profile,
+    })
+    .from(characters)
+    .where(and(eq(characters.bookId, bookId), isNotNull(characters.appearanceToken)))
+    .orderBy(desc(characters.sceneCount), asc(characters.createdAt));
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    aliases: r.aliases,
+    oneLine: sanitizedProfile(r.profile)?.oneLine ?? null,
+  }));
 }
 
 /** Per kind+subject bookkeeping of what already exists in the images table. */
@@ -208,14 +467,243 @@ async function loadExistingImages(db: Db, bookId: string): Promise<ExistingImage
 }
 
 /**
- * Imagine stage: one image per significant character (portrait) and per
- * analyzed scene (storyboard frame), generated sequentially (one GPU),
- * encoded to webp (full + 384px thumb), stored in MinIO, and recorded in the
- * images table with full provenance (prompt, seed, params, duration).
+ * Rebuild semantics (Phase 0, full-run only): planning is idempotent by
+ * destroy-and-recompute. We delete the book's existing illustration_points rows
+ * AND its existing scene_storyboard images (DB rows + best-effort MinIO objects)
+ * before planning, so a re-run produces a clean, current set rather than
+ * accumulating stale points/frames keyed to old offsets. Portraits
+ * (character_portrait) are deliberately NOT touched — character identity is
+ * stable across re-illustration and portraits are expensive to redo.
+ */
+async function rebuildResetStoryboards(db: Db, bookId: string, log: (m: string) => void): Promise<void> {
+  const storyboardRows = await db
+    .select({
+      id: images.id,
+      objectKey: images.objectKey,
+      thumbObjectKey: images.thumbObjectKey,
+    })
+    .from(images)
+    .where(and(eq(images.bookId, bookId), eq(images.kind, 'scene_storyboard')));
+
+  // Best-effort object cleanup: a missing/failed delete must not block the
+  // rebuild (the DB row is the source of truth; orphaned objects are harmless).
+  for (const row of storyboardRows) {
+    for (const key of [row.objectKey, row.thumbObjectKey]) {
+      if (!key) continue;
+      try {
+        await deleteObject('images', key);
+      } catch (err) {
+        log(`rebuild: failed to delete object ${key} (ignored): ${redactSecrets(String(err))}`);
+      }
+    }
+  }
+
+  await db
+    .delete(images)
+    .where(and(eq(images.bookId, bookId), eq(images.kind, 'scene_storyboard')));
+  await db.delete(illustrationPoints).where(eq(illustrationPoints.bookId, bookId));
+
+  log(
+    `rebuild: cleared ${storyboardRows.length} storyboard image(s) and all prior illustration points`,
+  );
+}
+
+/**
+ * Phase 0 re-plan gating decision (pure, unit-testable).
  *
- * Resume-safe: subjects that already have a 'done' image of the same kind are
- * skipped. `only` targets a single subject for regeneration — it never skips,
- * and writes the next version.
+ * A "Generate art" run does a destructive rebuild (delete old points +
+ * storyboards) then re-plans with the LLM, which is nondeterministic. On a
+ * transient mid-Phase-1 failure BullMQ retries the SAME job/runId — if Phase 0
+ * rebuilt again it would wipe the already-`done` storyboards and produce a
+ * DIFFERENT set of point ids, defeating Phase 1's resume-skip. So we stamp each
+ * planned point with its run's id and gate the rebuild on it:
+ *
+ *  - No existing points → fresh run → re-plan (true).
+ *  - Any existing point whose runId !== this run's id → the points belong to an
+ *    older "Generate art" run (or pre-date the stamp / are null) → this is a
+ *    genuinely fresh run → rebuild + re-plan (true).
+ *  - Every existing point already carries THIS runId → Phase 0 completed for
+ *    this run and we are on a retry → skip the rebuild + re-plan, jump straight
+ *    to Phase 1 which resumes against the stable point ids (false).
+ */
+export function shouldReplan(
+  existingPoints: Array<{ runId: string | null }>,
+  runId: string,
+): boolean {
+  if (existingPoints.length === 0) return true;
+  return existingPoints.some((p) => p.runId !== runId);
+}
+
+/** Existing illustration points for the book, just the rebuild-gating fields. */
+async function loadExistingPointStamps(
+  db: Db,
+  bookId: string,
+): Promise<Array<{ id: string; runId: string | null }>> {
+  return db
+    .select({ id: illustrationPoints.id, runId: illustrationPoints.runId })
+    .from(illustrationPoints)
+    .where(eq(illustrationPoints.bookId, bookId));
+}
+
+/**
+ * Phase 0 — plan illustration points for every narrative chapter. One LLM call
+ * per surviving chapter; non-narrative chapters (front/back matter, promos) are
+ * skipped via the heuristic pre-filter and get no points. Per-chapter failures
+ * are logged and skipped; only a systemic LLM error (server gone / model
+ * missing) aborts the whole stage. Points are persisted per-chapter (committed
+ * incrementally) and stamped with this run's id, so a later-chapter abort keeps
+ * the earlier chapters' points and a retry of this run resumes (via the
+ * shouldReplan gate) instead of re-planning.
+ *
+ * Accepted destructive window: the rebuild deletes the old points + storyboards
+ * BEFORE planning (a rebuild inherently replaces). If a systemic LLM failure
+ * aborts before ANY chapter's points are inserted, the book is left with no art
+ * and no points (status stays 'imagining'); BullMQ then retries, which — with
+ * zero points persisted — re-plans from scratch. This is the accepted
+ * "rebuild in progress" window; we deliberately do NOT wrap the whole book in a
+ * transaction.
+ */
+async function planIllustrationPoints(args: {
+  db: Db;
+  bookId: string;
+  runId: string;
+  book: { title: string; userId: string; llmProvider: string | null; llmModel: string | null };
+  log: (m: string) => void;
+}): Promise<void> {
+  const { db, bookId, runId, book, log } = args;
+
+  const llm: LLM = await resolveLlm(db, book);
+  // The planner makes one LLM call per chapter; fail fast (with retries for a
+  // momentary home-box blip) rather than discover the LLM is down on chapter 1.
+  let health = { ok: false, detail: 'not checked' } as { ok: boolean; detail?: string };
+  for (let attempt = 1; attempt <= HEALTH_CHECK_ATTEMPTS; attempt++) {
+    health = await llm.healthCheck();
+    if (health.ok) break;
+    if (attempt < HEALTH_CHECK_ATTEMPTS) {
+      log(`LLM health check attempt ${attempt} failed (${health.detail}); retrying`);
+      await sleep(HEALTH_CHECK_BACKOFF_MS);
+    }
+  }
+  if (!health.ok) {
+    throw new Error(
+      `imagine: LLM health check failed after ${HEALTH_CHECK_ATTEMPTS} attempts: ${health.detail}`,
+    );
+  }
+
+  const roster = await loadRoster(db, bookId);
+  const chapterRows = await loadChapters(db, bookId);
+  // Analyzed scenes per chapter — the safety net when the planner returns zero.
+  const fallbackScenesByChapter = await loadFallbackScenesByChapter(db, bookId);
+
+  // Idempotent rebuild: wipe prior points + storyboards before re-planning.
+  await rebuildResetStoryboards(db, bookId, log);
+
+  const total = chapterRows.length;
+  let planned = 0;
+  let pointCount = 0;
+
+  let chapterIndex = 0;
+  for (const chapter of chapterRows) {
+    await reportProgress(runId, {
+      stage: 'imagine',
+      percent: (chapterIndex / Math.max(1, total)) * PLANNING_PERCENT_END,
+      currentStep: `Planning illustrations (ch ${chapterIndex + 1}/${total})`,
+    });
+    chapterIndex++;
+
+    if (isNonNarrative({ title: chapter.title, wordCount: chapter.wordCount ?? 0 })) {
+      log(`chapter ${chapter.idx} ("${chapter.title ?? ''}") non-narrative — no points`);
+      continue;
+    }
+
+    const maxMoments = imagesPerChapter(chapter.wordCount ?? 0);
+    try {
+      const result = await planChapterIllustrations({
+        chapter: { id: chapter.id, text: chapter.text, title: chapter.title },
+        roster,
+        maxMoments,
+        llm,
+        bookTitle: book.title,
+      });
+      await incrementRunTokens(runId, result.tokensIn, result.tokensOut);
+
+      // Robust invariant: a narrative chapter must never be left unillustrated.
+      // If the LLM returned zero moments (e.g. it returned isNarrative true with
+      // an empty array for a long/truncated chapter), derive points from the
+      // chapter's analyzed scenes — no extra LLM call. Degrades gracefully to
+      // the old per-scene behavior for just this chapter.
+      let points = result.points;
+      if (points.length === 0) {
+        const fallback = sceneFallbackPoints(
+          fallbackScenesByChapter.get(chapter.id) ?? [],
+          maxMoments,
+        );
+        if (fallback.length > 0) {
+          log(
+            `chapter ${chapter.idx}: planner returned 0 points; ` +
+              `fell back to ${fallback.length} scene-derived point(s)`,
+          );
+          points = fallback;
+        }
+      }
+
+      if (points.length > 0) {
+        // Insert per-chapter, committed incrementally: a later chapter's failure
+        // leaves earlier chapters' points persisted (stamped with this runId), so
+        // a retry of this run resumes via the shouldReplan gate rather than
+        // re-planning. Each point carries runId so Phase 0 can tell a retry of
+        // THIS run from a genuinely fresh "Generate art" run.
+        await db.insert(illustrationPoints).values(
+          points.map((p) => ({
+            bookId,
+            chapterId: chapter.id,
+            runId,
+            idx: p.idx,
+            charOffset: p.charOffset,
+            anchorQuote: p.anchorQuote,
+            momentDescription: p.momentDescription,
+            presentCharacterIds: p.presentCharacterIds,
+            score: p.score,
+          })),
+        );
+      }
+      planned++;
+      pointCount += points.length;
+      log(`chapter ${chapter.idx}: planned ${points.length}/${maxMoments} point(s)`);
+    } catch (err) {
+      if (!(err instanceof StructuredOutputError) && !(err instanceof OllamaError)) throw err;
+      // Systemic LLM failure: every subsequent chapter would fail too — abort
+      // and let BullMQ retry the stage (a fresh rebuild + re-plan).
+      if (err instanceof OllamaError && err.code && SYSTEMIC_OLLAMA_CODES.has(err.code)) {
+        throw new Error(`imagine: systemic LLM failure (${err.code}): ${err.message}`);
+      }
+      // A single hard chapter (bad structured output) must not block the book.
+      log(`chapter ${chapter.idx} planning failed (skipped): ${redactSecrets(err.message)}`);
+    }
+  }
+
+  log(`planning complete: ${pointCount} point(s) across ${planned}/${total} chapter(s)`);
+}
+
+/**
+ * Imagine stage. Two phases:
+ *
+ * Phase 0 (full-run only) — plan illustration points: one LLM call per
+ * narrative chapter picks the best N quote-anchored visual moments and persists
+ * them to illustration_points (idempotent rebuild; see rebuildResetStoryboards).
+ * Run-stamped (see shouldReplan): a fresh "Generate art" run rebuilds + re-plans
+ * once; a BullMQ retry of the same runId skips Phase 0 and resumes Phase 1.
+ *
+ * Phase 1 — generate: one image per significant character (portrait) and per
+ * planned illustration point (storyboard frame), generated sequentially (one
+ * GPU), encoded to webp (full + 384px thumb), stored in MinIO, and recorded in
+ * the images table with full provenance.
+ *
+ * Resume-safe: subjects with a 'done' image of the same kind are skipped (after
+ * a rebuild the points are fresh, so nothing is skipped). `only` targets a
+ * single subject for regeneration — it skips Phase 0 entirely, never skips, and
+ * writes the next version. For storyboards `only.subjectId` is an
+ * illustration_points id.
  */
 export async function runImagine(payload: ImagineJobPayload): Promise<void> {
   const { bookId, runId, only } = payload;
@@ -235,8 +723,31 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
   await reportProgress(runId, {
     stage: 'imagine',
     percent: 0,
-    currentStep: 'Preparing illustrations',
+    currentStep: only ? 'Regenerating illustration' : 'Planning illustrations',
   });
+
+  // -------------------------------------------------------------------------
+  // Phase 0 — plan illustration points (full run only; only-mode reuses the
+  // points already planned by a prior full run).
+  //
+  // Run-stamping makes the destructive rebuild + nondeterministic re-plan run
+  // ONCE per "Generate art" run. On a BullMQ retry of this same runId (e.g. a
+  // transient ComfyUI blip mid-Phase-1), every existing point already carries
+  // this runId, so we SKIP Phase 0 entirely and fall through to Phase 1, which
+  // resume-skips the storyboards already 'done' (by stable point id) and only
+  // regenerates the missing ones.
+  // -------------------------------------------------------------------------
+  if (!only) {
+    const existingPoints = await loadExistingPointStamps(db, bookId);
+    if (shouldReplan(existingPoints, runId)) {
+      await planIllustrationPoints({ db, bookId, runId, book, log });
+    } else {
+      log(
+        `Phase 0 skipped: all ${existingPoints.length} illustration point(s) ` +
+          `carry this run's id (${runId}) — retry resumes Phase 1`,
+      );
+    }
+  }
 
   // Style preset: the book's pinned preset, else the built-in default.
   const style = book.stylePresetId
@@ -275,7 +786,8 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // Work plan: portraits first (they anchor character identity), then scenes.
+  // Phase 1 work plan: portraits first (they anchor character identity), then
+  // one storyboard per planned illustration point.
   // -------------------------------------------------------------------------
   const existing = await loadExistingImages(db, bookId);
   const nextVersion = (kind: ImageKind, subjectId: string): number =>
@@ -283,8 +795,7 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
 
   const portraitChars = await loadPortraitCharacters(db, bookId);
   const sceneRows = await loadAnalyzedScenes(db, bookId);
-  const sceneCasts = await loadSceneCasts(db, bookId);
-  const totalScenes = sceneRows.length;
+  const pointRows = await loadIllustrationPoints(db, bookId);
 
   const portraitItem = (c: PortraitCharacter, step: string): WorkItem => {
     const { prompt, negative } = buildPortraitPrompt({ character: c, style: styleFragment });
@@ -300,21 +811,34 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
     };
   };
 
-  const sceneItem = (s: SceneRow): WorkItem => {
+  // A storyboard item per illustration point: the moment description IS the key
+  // visual moment, the setting/mood are borrowed from the analyzed scene
+  // containing the point's offset, and the cast is the point's present
+  // characters resolved to appearance tokens.
+  const storyboardItem = async (point: IllustrationPointRow, step: string): Promise<WorkItem> => {
+    const chapterScenes = sceneRows.filter((s) => s.chapterId === point.chapterId);
+    const ctx = sceneContextForOffset(chapterScenes, point.charOffset);
+    const cast = await loadPointCast(db, bookId, point.presentCharacterIds);
     const { prompt, negative } = buildScenePrompt({
-      scene: s,
-      characters: sceneCasts.get(s.id) ?? [],
+      scene: {
+        summary: point.momentDescription,
+        setting: ctx.setting,
+        timeOfDay: ctx.timeOfDay,
+        mood: ctx.mood,
+        keyVisualMoment: point.momentDescription,
+      },
+      characters: cast,
       style: styleFragment,
     });
     return {
       kind: 'scene_storyboard',
-      subjectId: s.id,
-      version: nextVersion('scene_storyboard', s.id),
+      subjectId: point.id,
+      version: nextVersion('scene_storyboard', point.id),
       width: SCENE_WIDTH,
       height: SCENE_HEIGHT,
       prompt,
       negative,
-      step: `Illustrating scene ${s.globalIdx + 1}/${totalScenes}`,
+      step,
     };
   };
 
@@ -332,9 +856,13 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
       }
       item = portraitItem(c, `Painting ${c.name}`);
     } else {
-      const s = sceneRows.find((row) => row.id === only.subjectId);
-      if (!s) throw new Error(`imagine: analyzed scene ${only.subjectId} not found`);
-      item = sceneItem(s);
+      const point = pointRows.find((p) => p.id === only.subjectId);
+      if (!point) {
+        throw new Error(
+          `imagine: illustration point ${only.subjectId} not found (stale regenerate request?)`,
+        );
+      }
+      item = await storyboardItem(point, 'Regenerating illustration');
     }
     item.version = only.version ?? item.version;
     plan = [item];
@@ -342,21 +870,32 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
     const portraits = portraitChars
       .filter((c) => !existing.done.has(subjectKey('character_portrait', c.id)))
       .map((c, i, arr) => portraitItem(c, `Painting ${c.name} (${i + 1}/${arr.length})`));
-    const storyboards = sceneRows
-      .filter((s) => !existing.done.has(subjectKey('scene_storyboard', s.id)))
-      .map(sceneItem);
+    const storyboardPoints = pointRows.filter(
+      (p) => !existing.done.has(subjectKey('scene_storyboard', p.id)),
+    );
+    const storyboards: WorkItem[] = [];
+    let moment = 0;
+    for (const point of storyboardPoints) {
+      moment++;
+      storyboards.push(
+        await storyboardItem(point, `Illustrating moment ${moment}/${storyboardPoints.length}`),
+      );
+    }
     plan = [...portraits, ...storyboards];
   }
 
   log(
     `plan: ${plan.filter((i) => i.kind === 'character_portrait').length} portraits + ` +
-      `${plan.filter((i) => i.kind === 'scene_storyboard').length} scenes` +
+      `${plan.filter((i) => i.kind === 'scene_storyboard').length} storyboards` +
       (only ? ' (only-mode)' : ''),
   );
 
   // -------------------------------------------------------------------------
   // Generate sequentially (one GPU; concurrency is enforced at the worker).
+  // Phase 1 owns the PLANNING_PERCENT_END..100 slice of the progress bar.
   // -------------------------------------------------------------------------
+  const genStart = only ? 0 : PLANNING_PERCENT_END;
+  const genSpan = 100 - genStart;
   let completed = 0;
   let attempted = 0;
   let failed = 0;
@@ -365,7 +904,7 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
   for (const item of plan) {
     await reportProgress(runId, {
       stage: 'imagine',
-      percent: (completed / Math.max(1, plan.length)) * 100,
+      percent: genStart + (completed / Math.max(1, plan.length)) * genSpan,
       currentStep: item.step,
     });
 
