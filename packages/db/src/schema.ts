@@ -352,6 +352,15 @@ export const illustrationPoints = pgTable(
     chapterId: uuid()
       .notNull()
       .references(() => chapters.id, { onDelete: 'cascade' }),
+    /**
+     * The pipeline_runs id of the run that planned this point (no FK — just the
+     * stamp). Lets imagine Phase 0 distinguish a fresh "Generate art" run (no
+     * points, or points stamped by an older run → rebuild + re-plan) from a
+     * BullMQ retry of the SAME run (all points carry this runId → skip the
+     * re-plan and resume generation against the stable point ids). Nullable for
+     * rows planned before this column existed.
+     */
+    runId: uuid(),
     /** Order of the point within the chapter (by char offset). */
     idx: integer().notNull(),
     /** Paragraph offset into `chapters.text` for inline placement. */

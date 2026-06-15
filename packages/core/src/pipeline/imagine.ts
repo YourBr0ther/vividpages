@@ -383,12 +383,59 @@ async function rebuildResetStoryboards(db: Db, bookId: string, log: (m: string) 
 }
 
 /**
+ * Phase 0 re-plan gating decision (pure, unit-testable).
+ *
+ * A "Generate art" run does a destructive rebuild (delete old points +
+ * storyboards) then re-plans with the LLM, which is nondeterministic. On a
+ * transient mid-Phase-1 failure BullMQ retries the SAME job/runId — if Phase 0
+ * rebuilt again it would wipe the already-`done` storyboards and produce a
+ * DIFFERENT set of point ids, defeating Phase 1's resume-skip. So we stamp each
+ * planned point with its run's id and gate the rebuild on it:
+ *
+ *  - No existing points → fresh run → re-plan (true).
+ *  - Any existing point whose runId !== this run's id → the points belong to an
+ *    older "Generate art" run (or pre-date the stamp / are null) → this is a
+ *    genuinely fresh run → rebuild + re-plan (true).
+ *  - Every existing point already carries THIS runId → Phase 0 completed for
+ *    this run and we are on a retry → skip the rebuild + re-plan, jump straight
+ *    to Phase 1 which resumes against the stable point ids (false).
+ */
+export function shouldReplan(
+  existingPoints: Array<{ runId: string | null }>,
+  runId: string,
+): boolean {
+  if (existingPoints.length === 0) return true;
+  return existingPoints.some((p) => p.runId !== runId);
+}
+
+/** Existing illustration points for the book, just the rebuild-gating fields. */
+async function loadExistingPointStamps(
+  db: Db,
+  bookId: string,
+): Promise<Array<{ id: string; runId: string | null }>> {
+  return db
+    .select({ id: illustrationPoints.id, runId: illustrationPoints.runId })
+    .from(illustrationPoints)
+    .where(eq(illustrationPoints.bookId, bookId));
+}
+
+/**
  * Phase 0 — plan illustration points for every narrative chapter. One LLM call
  * per surviving chapter; non-narrative chapters (front/back matter, promos) are
  * skipped via the heuristic pre-filter and get no points. Per-chapter failures
  * are logged and skipped; only a systemic LLM error (server gone / model
- * missing) aborts the whole stage. Returns nothing — points are persisted as we
- * go so a retry resumes from a clean rebuild.
+ * missing) aborts the whole stage. Points are persisted per-chapter (committed
+ * incrementally) and stamped with this run's id, so a later-chapter abort keeps
+ * the earlier chapters' points and a retry of this run resumes (via the
+ * shouldReplan gate) instead of re-planning.
+ *
+ * Accepted destructive window: the rebuild deletes the old points + storyboards
+ * BEFORE planning (a rebuild inherently replaces). If a systemic LLM failure
+ * aborts before ANY chapter's points are inserted, the book is left with no art
+ * and no points (status stays 'imagining'); BullMQ then retries, which — with
+ * zero points persisted — re-plans from scratch. This is the accepted
+ * "rebuild in progress" window; we deliberately do NOT wrap the whole book in a
+ * transaction.
  */
 async function planIllustrationPoints(args: {
   db: Db;
@@ -453,10 +500,16 @@ async function planIllustrationPoints(args: {
       await incrementRunTokens(runId, result.tokensIn, result.tokensOut);
 
       if (result.points.length > 0) {
+        // Insert per-chapter, committed incrementally: a later chapter's failure
+        // leaves earlier chapters' points persisted (stamped with this runId), so
+        // a retry of this run resumes via the shouldReplan gate rather than
+        // re-planning. Each point carries runId so Phase 0 can tell a retry of
+        // THIS run from a genuinely fresh "Generate art" run.
         await db.insert(illustrationPoints).values(
           result.points.map((p) => ({
             bookId,
             chapterId: chapter.id,
+            runId,
             idx: p.idx,
             charOffset: p.charOffset,
             anchorQuote: p.anchorQuote,
@@ -490,6 +543,8 @@ async function planIllustrationPoints(args: {
  * Phase 0 (full-run only) — plan illustration points: one LLM call per
  * narrative chapter picks the best N quote-anchored visual moments and persists
  * them to illustration_points (idempotent rebuild; see rebuildResetStoryboards).
+ * Run-stamped (see shouldReplan): a fresh "Generate art" run rebuilds + re-plans
+ * once; a BullMQ retry of the same runId skips Phase 0 and resumes Phase 1.
  *
  * Phase 1 — generate: one image per significant character (portrait) and per
  * planned illustration point (storyboard frame), generated sequentially (one
@@ -526,9 +581,24 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
   // -------------------------------------------------------------------------
   // Phase 0 — plan illustration points (full run only; only-mode reuses the
   // points already planned by a prior full run).
+  //
+  // Run-stamping makes the destructive rebuild + nondeterministic re-plan run
+  // ONCE per "Generate art" run. On a BullMQ retry of this same runId (e.g. a
+  // transient ComfyUI blip mid-Phase-1), every existing point already carries
+  // this runId, so we SKIP Phase 0 entirely and fall through to Phase 1, which
+  // resume-skips the storyboards already 'done' (by stable point id) and only
+  // regenerates the missing ones.
   // -------------------------------------------------------------------------
   if (!only) {
-    await planIllustrationPoints({ db, bookId, runId, book, log });
+    const existingPoints = await loadExistingPointStamps(db, bookId);
+    if (shouldReplan(existingPoints, runId)) {
+      await planIllustrationPoints({ db, bookId, runId, book, log });
+    } else {
+      log(
+        `Phase 0 skipped: all ${existingPoints.length} illustration point(s) ` +
+          `carry this run's id (${runId}) — retry resumes Phase 1`,
+      );
+    }
   }
 
   // Style preset: the book's pinned preset, else the built-in default.

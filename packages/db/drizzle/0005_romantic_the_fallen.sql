@@ -1,0 +1,1 @@
+ALTER TABLE "illustration_points" ADD COLUMN "run_id" uuid;

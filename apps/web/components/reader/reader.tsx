@@ -388,10 +388,16 @@ export function Reader({
         // The chapter's points are sorted by charOffset; a point belongs to the
         // scene whose [startOffset, endOffset) contains its offset. The last
         // scene keeps its upper bound open so a point at the very end of the
-        // chapter (== final endOffset) still renders.
+        // chapter (== final endOffset) still renders. The FIRST scene also
+        // claims any point that lands BEFORE its startOffset: leading headings
+        // can be stripped so the first scene's startOffset is > 0, and a point
+        // at offset 0 would otherwise fall through every scene and be lost
+        // (dropped plate + wasted image). Clamped pre-first-scene points emit
+        // before the first paragraph; the open lower bound is first-scene-only
+        // so no point is double-placed.
         points: chapter.illustrationPoints.filter(
           (point) =>
-            point.charOffset >= scene.startOffset &&
+            (i === 0 || point.charOffset >= scene.startOffset) &&
             (i === chapter.scenes.length - 1 || point.charOffset < scene.endOffset),
         ),
       })),
