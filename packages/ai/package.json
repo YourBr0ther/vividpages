@@ -7,16 +7,23 @@
     ".": "./src/index.ts",
     "./llm/types": "./src/llm/types.ts",
     "./llm/ollama": "./src/llm/ollama.ts",
+    "./llm/anthropic": "./src/llm/anthropic.ts",
+    "./llm/openai": "./src/llm/openai.ts",
     "./embed/types": "./src/embed/types.ts",
     "./embed/ollama": "./src/embed/ollama.ts",
+    "./embed/openai": "./src/embed/openai.ts",
     "./structured": "./src/structured.ts",
     "./image/types": "./src/image/types.ts",
-    "./image/comfyui": "./src/image/comfyui.ts"
+    "./image/comfyui": "./src/image/comfyui.ts",
+    "./image/openai": "./src/image/openai.ts",
+    "./registry": "./src/registry.ts"
   },
   "scripts": {
     "test": "vitest run"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.1",
+    "openai": "^6.42.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

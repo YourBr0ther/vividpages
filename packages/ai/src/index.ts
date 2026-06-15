@@ -1,7 +1,24 @@
 export type { CompleteOptions, LLM, LLMCompletion } from './llm/types';
 export { OllamaError, OllamaLLM, type OllamaLLMOptions } from './llm/ollama';
+export {
+  AnthropicError,
+  AnthropicLLM,
+  type AnthropicClientLike,
+  type AnthropicLLMOptions,
+} from './llm/anthropic';
+export {
+  OpenAILLM,
+  type OpenAIChatClientLike,
+  type OpenAILLMOptions,
+} from './llm/openai';
+export { OpenAIError } from './openai/error';
 export type { Embedder } from './embed/types';
 export { OllamaEmbedder, type OllamaEmbedderOptions } from './embed/ollama';
+export {
+  OpenAIEmbedder,
+  type OpenAIEmbedClientLike,
+  type OpenAIEmbedderOptions,
+} from './embed/openai';
 export {
   completeStructured,
   StructuredOutputError,
@@ -20,3 +37,17 @@ export {
   type WorkflowGraph,
   type WorkflowNode,
 } from './image/comfyui';
+export {
+  mapToSupportedSize,
+  OpenAIImageGen,
+  type OpenAIImageClientLike,
+  type OpenAIImageGenOptions,
+} from './image/openai';
+export {
+  createEmbedder,
+  createImageGen,
+  createLLM,
+  RegistryError,
+  type Provider,
+  type ProviderConfig,
+} from './registry';
