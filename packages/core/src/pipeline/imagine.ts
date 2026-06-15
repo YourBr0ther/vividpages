@@ -28,8 +28,24 @@ import { completeRun, isRunSuperseded, reportProgress, setBookStatus } from './p
 /** ComfyUIError codes that mean the server is gone — no image can succeed. */
 const SYSTEMIC_COMFYUI_CODES = new Set(['NETWORK', 'TIMEOUT']);
 
-/** If the first this-many generations ALL fail, the failure is systemic. */
+/**
+ * A home GPU box blips: a single dropped health ping or one slow generation is
+ * not "the server is gone". Retry the same image this many times (with a
+ * re-health-check + backoff between) before counting it as a real failure.
+ */
+const TRANSIENT_RETRY_ATTEMPTS = 3;
+/** Backoff between transient retries (ms). */
+const TRANSIENT_BACKOFF_MS = [5_000, 15_000, 30_000];
+/** Only when this many images fail back-to-back do we treat the run as doomed. */
+const CONSECUTIVE_SYSTEMIC_LIMIT = 4;
+/** Upfront health check: retries before failing the stage. */
+const HEALTH_CHECK_ATTEMPTS = 4;
+const HEALTH_CHECK_BACKOFF_MS = 10_000;
+
+/** If the first this-many generations ALL fail (e.g. bad prompts), bail early. */
 const EARLY_FAILURE_WINDOW = 5;
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** Style preset used when the book doesn't pin one. */
 const DEFAULT_STYLE_SLUG = 'painterly-fantasy';
@@ -247,9 +263,21 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
   };
 
   const imageGen: ImageGen = await resolveImageGen(db, book);
-  const health = await imageGen.healthCheck();
+  // A home GPU box can be momentarily unreachable; retry before giving up so a
+  // single blip doesn't fail a 100+ image run.
+  let health = { ok: false, detail: 'not checked' } as { ok: boolean; detail?: string };
+  for (let attempt = 1; attempt <= HEALTH_CHECK_ATTEMPTS; attempt++) {
+    health = await imageGen.healthCheck();
+    if (health.ok) break;
+    if (attempt < HEALTH_CHECK_ATTEMPTS) {
+      log(`health check attempt ${attempt} failed (${health.detail}); retrying`);
+      await sleep(HEALTH_CHECK_BACKOFF_MS);
+    }
+  }
   if (!health.ok) {
-    throw new Error(`imagine: ComfyUI health check failed: ${health.detail}`);
+    throw new Error(
+      `imagine: ComfyUI health check failed after ${HEALTH_CHECK_ATTEMPTS} attempts: ${health.detail}`,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -338,6 +366,7 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
   let completed = 0;
   let attempted = 0;
   let failed = 0;
+  let consecutiveSystemic = 0;
 
   for (const item of plan) {
     await reportProgress(runId, {
@@ -348,12 +377,28 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
 
     attempted++;
     try {
-      const result = await imageGen.generate({
-        prompt: item.prompt,
-        negative: item.negative,
-        width: item.width,
-        height: item.height,
-      });
+      // Retry transient ComfyUI blips (dropped connection / slow generation)
+      // on the same image before treating it as a failure.
+      let result;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          result = await imageGen.generate({
+            prompt: item.prompt,
+            negative: item.negative,
+            width: item.width,
+            height: item.height,
+          });
+          break;
+        } catch (genErr) {
+          if (!isSystemicImageError(genErr) || attempt >= TRANSIENT_RETRY_ATTEMPTS) throw genErr;
+          const backoff = TRANSIENT_BACKOFF_MS[attempt - 1] ?? 30_000;
+          log(
+            `${item.kind} ${item.subjectId} transient error ` +
+              `(${(genErr as ComfyUIError).code}), retry ${attempt}/${TRANSIENT_RETRY_ATTEMPTS} in ${backoff}ms`,
+          );
+          await sleep(backoff);
+        }
+      }
 
       const webp = await sharp(result.png).webp({ quality: WEBP_QUALITY }).toBuffer();
       const thumb = await sharp(result.png)
@@ -391,6 +436,7 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
         status: 'done',
         version: item.version,
       });
+      consecutiveSystemic = 0;
       log(
         `${item.kind} ${item.subjectId} v${item.version} done ` +
           `(seed ${result.seed}, ${result.durationMs}ms)`,
@@ -417,12 +463,26 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
         console.error(`[imagine ${bookId}] failed to record image failure:`, recordErr);
       }
 
-      // Systemic: the server is unreachable or saturated — every subsequent
-      // image would fail too, so abort and let BullMQ retry the stage.
+      // A systemic error here means the per-image retries above were already
+      // exhausted. One image's worth of blips must not nuke a 100+ image run,
+      // so only abort once several images fail back-to-back (server truly gone
+      // or saturated); BullMQ then retries the stage, which resumes (done
+      // images are skipped).
       if (isSystemicImageError(err)) {
-        throw new Error(
-          `imagine: systemic ComfyUI failure (${(err as ComfyUIError).code}): ${message}`,
+        consecutiveSystemic++;
+        failed++;
+        log(
+          `${item.kind} ${item.subjectId} v${item.version} systemic failure ` +
+            `${consecutiveSystemic}/${CONSECUTIVE_SYSTEMIC_LIMIT}: ${message}`,
         );
+        if (consecutiveSystemic >= CONSECUTIVE_SYSTEMIC_LIMIT) {
+          throw new Error(
+            `imagine: ${consecutiveSystemic} consecutive ComfyUI failures — ` +
+              `aborting as systemic (last: ${message})`,
+          );
+        }
+        completed++;
+        continue;
       }
       // Unexpected (sharp/storage/db): not a per-image generation problem.
       if (!(err instanceof ComfyUIError)) throw err;
