@@ -52,7 +52,12 @@ export default async function AppLayout({
               Library
             </Link>
             <DisabledNavLink label="Jobs" />
-            <DisabledNavLink label="Settings" />
+            <Link
+              href="/settings"
+              className="rounded-full px-3 py-1.5 font-medium text-stone-300 transition hover:bg-stone-800/50 hover:text-parchment"
+            >
+              Settings
+            </Link>
           </nav>
 
           <div className="ml-auto flex items-center gap-4">

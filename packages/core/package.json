@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./env": "./src/env.ts",
+    "./crypto": "./src/crypto.ts",
     "./epub/parse": "./src/epub/parse.ts",
     "./epub/text": "./src/epub/text.ts",
     "./segment": "./src/segment.ts",

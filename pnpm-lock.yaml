@@ -23,6 +23,9 @@ importers:
       '@node-rs/argon2':
         specifier: ^2.0.2
         version: 2.0.2
+      '@vividpages/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@vividpages/core':
         specifier: workspace:*
         version: link:../../packages/core

@@ -10,6 +10,7 @@
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.2",
     "@node-rs/argon2": "^2.0.2",
+    "@vividpages/ai": "workspace:*",
     "@vividpages/core": "workspace:*",
     "@vividpages/db": "workspace:*",
     "drizzle-orm": "^0.44.0",
