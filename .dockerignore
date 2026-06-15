@@ -1,0 +1,41 @@
+# Dependencies (reinstalled inside the image from the lockfile)
+node_modules
+**/node_modules
+
+# Build outputs (rebuilt inside the image)
+.next
+**/.next
+dist
+**/dist
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# Git / VCS
+.git
+.gitignore
+
+# Secrets / local env (env is injected at runtime, never baked in)
+.env
+.env.*
+
+# Large local artifacts
+*.epub
+
+# Test / dev tooling artifacts
+test-results
+playwright-report
+.playwright-mcp
+e2e
+playwright.config.ts
+packages/core/test/fixtures
+
+# Docs / screenshots
+docs
+
+# Editor / OS
+.DS_Store
+.claude
+
+# Docker files themselves
+**/Dockerfile
+.dockerignore
