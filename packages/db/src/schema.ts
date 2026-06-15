@@ -339,6 +339,46 @@ export const images = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Illustration points (planning output, one row per planned moment)
+// ---------------------------------------------------------------------------
+
+export const illustrationPoints = pgTable(
+  'illustration_points',
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    bookId: uuid()
+      .notNull()
+      .references(() => books.id, { onDelete: 'cascade' }),
+    chapterId: uuid()
+      .notNull()
+      .references(() => chapters.id, { onDelete: 'cascade' }),
+    /** Order of the point within the chapter (by char offset). */
+    idx: integer().notNull(),
+    /** Paragraph offset into `chapters.text` for inline placement. */
+    charOffset: integer().notNull(),
+    /** Verbatim sentence the LLM keyed on (locates offset; debug). */
+    anchorQuote: text().notNull(),
+    /** Visual description fed to the image prompt. */
+    momentDescription: text().notNull(),
+    /** Cast present at the moment, for the prompt's appearance tokens. */
+    presentCharacterIds: text()
+      .array()
+      .notNull()
+      .default(sql`'{}'::uuid[]`),
+    /** LLM importance rank (top-N selection + future tuning). */
+    score: real(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('illustration_points_chapter_idx_unique').on(t.chapterId, t.idx),
+    index('illustration_points_book_idx').on(t.bookId),
+  ],
+);
+
+export type IllustrationPoint = typeof illustrationPoints.$inferSelect;
+
+// ---------------------------------------------------------------------------
 // Ops
 // ---------------------------------------------------------------------------
 
