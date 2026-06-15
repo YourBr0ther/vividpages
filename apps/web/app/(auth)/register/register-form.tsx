@@ -4,6 +4,8 @@ import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
+import { purgeContentCaches } from '@/lib/purge-caches';
+
 import { inputClass } from '../form-styles';
 
 export function RegisterForm() {
@@ -45,6 +47,9 @@ export function RegisterForm() {
         password,
         redirect: false,
       });
+      // Defensively purge any private SW caches left by a prior user on this
+      // browser before entering the new session.
+      await purgeContentCaches();
       navigating = true;
       if (result?.error) {
         // Unlikely, but fall back to the login page rather than crashing.

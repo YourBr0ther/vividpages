@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
-import { auth, signOut } from '@/auth';
+import { auth } from '@/auth';
+import { SignOutButton } from '@/components/sign-out-button';
 
 /**
  * Authenticated app shell: candlelit-ink atmosphere, top nav with the
@@ -60,19 +61,7 @@ export default async function AppLayout({
               {initial}
               <span className="sr-only">{displayName}</span>
             </span>
-            <form
-              action={async () => {
-                'use server';
-                await signOut({ redirectTo: '/login' });
-              }}
-            >
-              <button
-                type="submit"
-                className="text-sm text-stone-400 transition hover:text-parchment"
-              >
-                Sign out
-              </button>
-            </form>
+            <SignOutButton />
           </div>
         </div>
       </header>

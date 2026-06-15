@@ -4,6 +4,8 @@ import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
+import { purgeContentCaches } from '@/lib/purge-caches';
+
 import { inputClass } from '../form-styles';
 
 export function LoginForm({
@@ -35,6 +37,9 @@ export function LoginForm({
         setError('Invalid email or password.');
         return;
       }
+      // Defensively purge any private SW caches left by a prior user who may
+      // have closed the tab without using the sign-out button.
+      await purgeContentCaches();
       navigating = true;
       router.push(callbackUrl);
       router.refresh();

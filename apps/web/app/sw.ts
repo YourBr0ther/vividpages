@@ -26,9 +26,12 @@ declare const self: ServiceWorkerGlobalScope;
  *
  * Note on privacy: the book-content and image responses are auth-protected
  * private JSON/bytes. Caching them in the Cache Storage API is per-browser
- * and same-origin only — there is no cross-user leak — but a shared device's
- * cached reads would be visible to whoever has the browser. That's the same
- * trade-off as any offline-capable reader and is acceptable here.
+ * and same-origin only — there is no cross-user leak. To stop a shared
+ * device's cached reads from being served to the next person, the
+ * 'book-content', 'book-images' and 'pages' caches below are deleted on
+ * sign-out (and defensively on sign-in) by lib/purge-caches.ts — Cache
+ * Storage can only be cleared from a client/window context, not a server
+ * action, so the purge lives there rather than in this worker.
  */
 const runtimeCaching: RuntimeCaching[] = [
   // Auth endpoints must NEVER be cached — always hit the network so sessions,
