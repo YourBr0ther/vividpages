@@ -1,42 +1,95 @@
-import { memo } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
+
+import type { SceneImageRef } from '@/lib/reader-types';
 
 /**
- * Empty illustration panel rendered between scenes. M5's imagine stage fills
- * these with generated art; until then the Reader keeps `showImageSlots` off
- * so the text reads clean.
+ * The scene's storyboard panel: a breakout plate wider than the prose column,
+ * with its aspect ratio reserved from the stored dimensions (no layout shift),
+ * lazy-loaded, and revealed with a quiet fade-and-rise once it scrolls into
+ * view (reduced motion: it simply appears). Clicking opens the lightbox.
  */
-function IllustrationSlot() {
+function SceneArt({
+  image,
+  sceneNumber,
+  onOpen,
+}: {
+  image: SceneImageRef;
+  sceneNumber: number;
+  onOpen: () => void;
+}) {
+  const figureRef = useRef<HTMLElement>(null);
+  const [inView, setInView] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    const figure = figureRef.current;
+    if (!figure) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setInView(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '120px 0px' },
+    );
+    observer.observe(figure);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <figure
-      aria-hidden
-      className="my-10 flex aspect-[21/9] w-full items-center justify-center rounded-md border border-dashed"
-      style={{ borderColor: 'var(--reader-border)' }}
+      ref={figureRef}
+      className="reader-art"
+      data-revealed={inView && loaded}
+      style={
+        image.width && image.height
+          ? { aspectRatio: `${image.width} / ${image.height}` }
+          : undefined
+      }
     >
-      <figcaption
-        className="text-[11px] font-sans uppercase tracking-[0.3em]"
-        style={{ color: 'var(--reader-muted)' }}
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`View illustration for scene ${sceneNumber}`}
+        className="block h-full w-full cursor-zoom-in"
       >
-        Illustration coming soon
-      </figcaption>
+        {/* Plain <img>: illustrations are private, per-user streamed objects. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={`/api/images/${image.id}`}
+          alt={`Illustration for scene ${sceneNumber}`}
+          width={image.width ?? undefined}
+          height={image.height ?? undefined}
+          loading="lazy"
+          decoding="async"
+          onLoad={() => setLoaded(true)}
+          className="h-full w-full object-cover"
+        />
+      </button>
     </figure>
   );
 }
 
 /**
  * One scene of a chapter: a quiet ✳ ornament separating it from the previous
- * scene (plus the future illustration slot), then its paragraphs. Memoized so
- * chrome show/hide re-renders never reconcile the book text.
+ * scene, the scene's storyboard plate when one has been painted, then its
+ * paragraphs. Memoized so chrome show/hide re-renders never reconcile the
+ * book text (callers must pass a stable `onImageOpen`).
  */
 export const SceneBlock = memo(function SceneBlock({
   globalIdx,
   paragraphs,
   isFirstInChapter,
-  showImageSlot,
+  image,
+  onImageOpen,
 }: {
   globalIdx: number;
   paragraphs: string[];
   isFirstInChapter: boolean;
-  showImageSlot: boolean;
+  /** The scene's latest finished storyboard, or null for no art (yet). */
+  image: SceneImageRef | null;
+  onImageOpen: (image: SceneImageRef, globalIdx: number) => void;
 }) {
   return (
     <>
@@ -45,8 +98,14 @@ export const SceneBlock = memo(function SceneBlock({
           ✳
         </div>
       ) : null}
-      {!isFirstInChapter && showImageSlot ? <IllustrationSlot /> : null}
       <section data-scene={globalIdx} aria-label={`Scene ${globalIdx + 1}`} className="scroll-mt-20">
+        {image ? (
+          <SceneArt
+            image={image}
+            sceneNumber={globalIdx + 1}
+            onOpen={() => onImageOpen(image, globalIdx)}
+          />
+        ) : null}
         {paragraphs.map((text, i) => (
           <p key={i} className={isFirstInChapter && i === 0 ? 'reader-dropcap' : undefined}>
             {text}

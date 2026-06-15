@@ -190,6 +190,37 @@
   user-select: none;
 }
 
+/*
+ * Inline storyboard plate: breaks out of the prose measure to ~860px
+ * (centered on the column), framed in the theme's border with a soft plinth
+ * shadow. The aspect-ratio is set inline from the stored dimensions so the
+ * space is reserved before the (lazy) image arrives — no layout shift. The
+ * image fades and rises into place once it's both in view and decoded.
+ */
+.reader-art {
+  --reader-art-width: min(860px, calc(100vw - 2.5rem));
+  width: var(--reader-art-width);
+  margin: 2.6em 0 2.8em calc(50% - var(--reader-art-width) / 2);
+  overflow: hidden;
+  border: 1px solid var(--reader-border);
+  border-radius: 6px;
+  background-color: var(--reader-hover);
+  box-shadow: 0 28px 56px -28px rgba(0, 0, 0, 0.55);
+}
+
+.reader-art img {
+  opacity: 0;
+  transform: translateY(10px);
+  transition:
+    opacity 0.6s ease,
+    transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.reader-art[data-revealed='true'] img {
+  opacity: 1;
+  transform: none;
+}
+
 /* Top chrome: slides away on scroll-down, returns on scroll-up/mouse move. */
 .reader-chrome {
   background: var(--reader-chrome);
@@ -246,6 +277,11 @@
   .reader-progressbar,
   .reader-btn {
     transition: none !important;
+  }
+  /* The plate simply appears — no rise, no fade. */
+  .reader-art img {
+    transition: none !important;
+    transform: none;
   }
   .reader-surface {
     scroll-behavior: auto !important;

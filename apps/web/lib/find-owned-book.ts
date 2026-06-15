@@ -1,7 +1,7 @@
 import { books, getDb } from '@vividpages/db';
 import { and, eq } from 'drizzle-orm';
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Loads the book only if it belongs to the user; non-UUID ids short-circuit

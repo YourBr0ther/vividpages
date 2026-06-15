@@ -13,6 +13,7 @@ import { STATUS_LABELS } from '@/lib/book-card-data';
 import { findOwnedBook } from '@/lib/find-owned-book';
 import {
   countAnalyzedScenes,
+  countDoneImages,
   getLatestRun,
   getReadingProgress,
   isActiveRun,
@@ -55,14 +56,16 @@ export default async function BookDetailPage({ params }: PageProps) {
   const { userId, book } = await loadOwnedBook(id);
   if (!book) notFound();
 
-  const [chapters, progress, cast, analyzedScenes, latestRun, llm] = await Promise.all([
-    listChaptersWithScenes(book.id),
-    getReadingProgress(userId, book.id),
-    listCast(book.id),
-    countAnalyzedScenes(book.id),
-    getLatestRun(book.id),
-    resolveLlmDisplay(userId, book),
-  ]);
+  const [chapters, progress, cast, analyzedScenes, latestRun, llm, illustrationCount] =
+    await Promise.all([
+      listChaptersWithScenes(book.id),
+      getReadingProgress(userId, book.id),
+      listCast(book.id),
+      countAnalyzedScenes(book.id),
+      getLatestRun(book.id),
+      resolveLlmDisplay(userId, book),
+      countDoneImages(book.id),
+    ]);
   const sceneCount = chapters.reduce((total, chapter) => total + chapter.sceneCount, 0);
   // Mirrors the imagine stage's portrait plan: significant roles with a token.
   const portraitCount = cast.filter(
@@ -77,6 +80,9 @@ export default async function BookDetailPage({ params }: PageProps) {
     book.wordCount != null ? `${numberFormat.format(book.wordCount)} words` : null,
     `${chapters.length} ${chapters.length === 1 ? 'chapter' : 'chapters'}`,
     `${sceneCount} ${sceneCount === 1 ? 'scene' : 'scenes'}`,
+    illustrationCount > 0
+      ? `${illustrationCount} ${illustrationCount === 1 ? 'illustration' : 'illustrations'}`
+      : null,
   ].filter((stat): stat is string => stat !== null);
 
   return (

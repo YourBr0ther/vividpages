@@ -1,6 +1,7 @@
 import type { CastMember, CastRole } from '@/lib/queries';
 
 import { bindingFor } from './book-cover-art';
+import { PortraitLightbox } from './portrait-lightbox';
 
 /** Role badge tints: ember for leads, deep red for villains, quiet otherwise. */
 const ROLE_BADGE_CLASS: Record<CastRole, string> = {
@@ -26,18 +27,18 @@ const CHIP_TRAITS = [
 ] as const;
 
 /**
- * Portrait slot: the character's image when one exists (M5), else a
- * cloth-binding monogram plate in the book-cover fallback's duotone style.
+ * Portrait slot: the character's painted portrait when one exists (click
+ * opens the lightbox with versions + regenerate), else a cloth-binding
+ * monogram plate in the book-cover fallback's duotone style.
  */
 function Portrait({ member }: { member: CastMember }) {
-  if (member.imageUrl) {
+  if (member.imageUrl && member.portraitImageId) {
     return (
-      // Plain <img>: portraits will be private, per-user streamed objects.
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={member.imageUrl}
-        alt={`Portrait of ${member.name}`}
-        className="h-full w-full object-cover"
+      <PortraitLightbox
+        characterId={member.id}
+        imageId={member.portraitImageId}
+        thumbUrl={member.imageUrl}
+        name={member.name}
       />
     );
   }

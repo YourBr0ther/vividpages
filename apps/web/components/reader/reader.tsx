@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
-import { chapterLabel, type ChapterPayload } from '@/lib/reader-types';
+import { Lightbox } from '@/components/lightbox';
+import { chapterLabel, type ChapterPayload, type SceneImageRef } from '@/lib/reader-types';
 
 import { ChapterPicker } from './chapter-picker';
 import {
@@ -18,9 +19,6 @@ import { SceneBlock } from './scene-block';
 
 const THEME_STORAGE_KEY = 'vividpages.reader.theme';
 const SIZE_STORAGE_KEY = 'vividpages.reader.size';
-
-/** M5 flips this on to show empty illustration panels between scenes. */
-const SHOW_IMAGE_SLOTS = false;
 
 /** Debounce for persisting the reading position. */
 const SAVE_DELAY_MS = 2000;
@@ -70,6 +68,9 @@ export function Reader({
   const [size, setSize] = useState<ReaderFontSize>('m');
   const [chromeHidden, setChromeHidden] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [lightbox, setLightbox] = useState<{ image: SceneImageRef; globalIdx: number } | null>(
+    null,
+  );
   // Quiet notice when the saved position landed mid-chapter (resuming to a
   // chapter's start is indistinguishable from just opening it — stay silent).
   const [resumedNotice, setResumedNotice] = useState(
@@ -228,7 +229,7 @@ export function Reader({
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
-      if (pickerOpen) return;
+      if (pickerOpen || lightbox) return;
       const target = event.target;
       if (
         target instanceof HTMLElement &&
@@ -246,7 +247,39 @@ export function Reader({
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [navigateTo, nextChapter, prevChapter, pickerOpen]);
+  }, [lightbox, navigateTo, nextChapter, prevChapter, pickerOpen]);
+
+  // ---- Illustrations: lightbox + post-regenerate version swap --------------
+
+  const openLightbox = useCallback((image: SceneImageRef, globalIdx: number) => {
+    setLightbox({ image, globalIdx });
+  }, []);
+
+  // A repaint finished while the lightbox was open: point the inline plate
+  // (current chapter state + the client-side chapter cache) at the new
+  // version so closing the lightbox doesn't show stale art.
+  const handleRegenerated = useCallback(
+    (subjectId: string, fresh: { id: string; version: number }) => {
+      const swap = (payload: ChapterPayload): ChapterPayload => ({
+        ...payload,
+        scenes: payload.scenes.map((scene) =>
+          scene.image?.subjectId === subjectId
+            ? { ...scene, image: { ...scene.image, ...fresh } }
+            : scene,
+        ),
+      });
+      for (const [idx, payload] of chapterCache.current) {
+        chapterCache.current.set(idx, swap(payload));
+      }
+      setChapter(swap);
+      setLightbox((open) =>
+        open && open.image.subjectId === subjectId
+          ? { ...open, image: { ...open.image, ...fresh } }
+          : open,
+      );
+    },
+    [],
+  );
 
   // ---- Scroll position: restore saved scene, else top of new chapter ------
 
@@ -353,6 +386,7 @@ export function Reader({
       chapter.scenes.map((scene, i) => ({
         globalIdx: scene.globalIdx,
         isFirst: i === 0,
+        image: scene.image,
         paragraphs: chapter.text
           .slice(scene.startOffset, scene.endOffset)
           .split('\n\n')
@@ -451,7 +485,8 @@ export function Reader({
                 globalIdx={scene.globalIdx}
                 paragraphs={scene.paragraphs}
                 isFirstInChapter={scene.isFirst}
-                showImageSlot={SHOW_IMAGE_SLOTS}
+                image={scene.image}
+                onImageOpen={openLightbox}
               />
             ))}
           </div>
@@ -542,6 +577,18 @@ export function Reader({
           currentIdx={chapter.idx}
           onSelect={(idx) => void navigateTo(idx)}
           onClose={() => setPickerOpen(false)}
+        />
+      ) : null}
+
+      {lightbox ? (
+        <Lightbox
+          imageId={lightbox.image.id}
+          subject={{ kind: 'scene_storyboard', id: lightbox.image.subjectId }}
+          title={`Scene ${lightbox.globalIdx + 1}`}
+          width={lightbox.image.width}
+          height={lightbox.image.height}
+          onClose={() => setLightbox(null)}
+          onRegenerated={(fresh) => handleRegenerated(lightbox.image.subjectId, fresh)}
         />
       ) : null}
     </div>

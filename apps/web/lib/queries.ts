@@ -3,14 +3,16 @@ import {
   chapters,
   characters,
   getDb,
+  images,
   pipelineRuns,
   readingProgress,
   scenes,
   userSettings,
+  type ImageKind,
 } from '@vividpages/db';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 
-import type { ChapterMeta, ChapterPayload, SceneRef } from './reader-types';
+import type { ChapterMeta, ChapterPayload, SceneImageRef, SceneRef } from './reader-types';
 
 export type BookRow = typeof books.$inferSelect;
 export type PipelineRunRow = typeof pipelineRuns.$inferSelect;
@@ -118,7 +120,40 @@ export async function listChaptersWithScenes(
   });
 }
 
-/** One chapter's full text plus its scene spans, or undefined if no such chapter. */
+/**
+ * The latest 'done' image per subject for a book+kind, as ONE grouped query
+ * (no per-subject N+1): fetch every finished row, newest version first, and
+ * keep the first row seen per subject.
+ */
+async function latestDoneImagesBySubject(
+  bookId: string,
+  kind: ImageKind,
+): Promise<Map<string, SceneImageRef>> {
+  const rows = await getDb()
+    .select({
+      id: images.id,
+      subjectId: images.subjectId,
+      width: images.width,
+      height: images.height,
+      version: images.version,
+    })
+    .from(images)
+    .where(and(eq(images.bookId, bookId), eq(images.kind, kind), eq(images.status, 'done')))
+    .orderBy(desc(images.version));
+
+  const bySubject = new Map<string, SceneImageRef>();
+  for (const row of rows) {
+    if (row.subjectId && !bySubject.has(row.subjectId)) {
+      bySubject.set(row.subjectId, { ...row, subjectId: row.subjectId });
+    }
+  }
+  return bySubject;
+}
+
+/**
+ * One chapter's full text plus its scenes — each with its latest finished
+ * storyboard (or null mid-pipeline) — or undefined if no such chapter.
+ */
 export async function getChapterWithScenes(
   bookId: string,
   chapterIdx: number,
@@ -130,18 +165,31 @@ export async function getChapterWithScenes(
   });
   if (!chapter) return undefined;
 
-  const sceneRows = await db
-    .select({
-      globalIdx: scenes.globalIdx,
-      idx: scenes.idx,
-      startOffset: scenes.startOffset,
-      endOffset: scenes.endOffset,
-    })
-    .from(scenes)
-    .where(eq(scenes.chapterId, chapter.id))
-    .orderBy(asc(scenes.idx));
+  const [sceneRows, artByScene] = await Promise.all([
+    db
+      .select({
+        id: scenes.id,
+        globalIdx: scenes.globalIdx,
+        idx: scenes.idx,
+        startOffset: scenes.startOffset,
+        endOffset: scenes.endOffset,
+      })
+      .from(scenes)
+      .where(eq(scenes.chapterId, chapter.id))
+      .orderBy(asc(scenes.idx)),
+    latestDoneImagesBySubject(bookId, 'scene_storyboard'),
+  ]);
 
-  return { idx: chapter.idx, title: chapter.title, text: chapter.text, scenes: sceneRows };
+  return {
+    idx: chapter.idx,
+    title: chapter.title,
+    text: chapter.text,
+    // The scene id stays server-side; the image's subjectId carries it where needed.
+    scenes: sceneRows.map(({ id, ...scene }) => ({
+      ...scene,
+      image: artByScene.get(id) ?? null,
+    })),
+  };
 }
 
 /** The user's saved reading position for a book, or undefined. */
@@ -180,7 +228,9 @@ export interface CastMember {
   profile: CastProfile | null;
   appearanceToken: string | null;
   sceneCount: number;
-  /** Portrait URL pathway; portraits arrive in M5, so null for now. */
+  /** Latest finished portrait image id, or null when none has been painted. */
+  portraitImageId: string | null;
+  /** Thumb URL for the latest portrait (derived from portraitImageId). */
   imageUrl: string | null;
 }
 
@@ -215,30 +265,51 @@ function toCastProfile(raw: unknown): CastProfile | null {
  * detail page's cast preview strip (which slices the top of this list).
  */
 export async function listCast(bookId: string): Promise<CastMember[]> {
-  const rows = await getDb()
-    .select({
-      id: characters.id,
-      name: characters.name,
-      aliases: characters.aliases,
-      role: characters.role,
-      profile: characters.profile,
-      appearanceToken: characters.appearanceToken,
-      sceneCount: characters.sceneCount,
-    })
-    .from(characters)
-    .where(eq(characters.bookId, bookId))
-    .orderBy(desc(characters.sceneCount), asc(characters.name));
+  const [rows, portraitByCharacter] = await Promise.all([
+    getDb()
+      .select({
+        id: characters.id,
+        name: characters.name,
+        aliases: characters.aliases,
+        role: characters.role,
+        profile: characters.profile,
+        appearanceToken: characters.appearanceToken,
+        sceneCount: characters.sceneCount,
+      })
+      .from(characters)
+      .where(eq(characters.bookId, bookId))
+      .orderBy(desc(characters.sceneCount), asc(characters.name)),
+    latestDoneImagesBySubject(bookId, 'character_portrait'),
+  ]);
 
-  return rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    aliases: row.aliases,
-    role: toCastRole(row.role),
-    profile: toCastProfile(row.profile),
-    appearanceToken: row.appearanceToken,
-    sceneCount: row.sceneCount,
-    imageUrl: null,
-  }));
+  return rows.map((row) => {
+    const portraitImageId = portraitByCharacter.get(row.id)?.id ?? null;
+    return {
+      id: row.id,
+      name: row.name,
+      aliases: row.aliases,
+      role: toCastRole(row.role),
+      profile: toCastProfile(row.profile),
+      appearanceToken: row.appearanceToken,
+      sceneCount: row.sceneCount,
+      portraitImageId,
+      imageUrl: portraitImageId ? `/api/images/${portraitImageId}?thumb=1` : null,
+    };
+  });
+}
+
+/**
+ * Number of finished illustrations (portraits + storyboards) for a book,
+ * counting each subject once however many versions it has.
+ */
+export async function countDoneImages(bookId: string): Promise<number> {
+  const [row] = await getDb()
+    .select({
+      count: sql<number>`count(distinct (${images.kind}, ${images.subjectId}))::int`,
+    })
+    .from(images)
+    .where(and(eq(images.bookId, bookId), eq(images.status, 'done')));
+  return row?.count ?? 0;
 }
 
 /** Number of scenes whose LLM analysis has completed. */
