@@ -55,8 +55,23 @@ describe('isNonNarrative', () => {
     }
   });
 
-  it('matches a "by <Name>" title that starts with by', () => {
+  it('matches a "by <Name>" title that is the entire byline', () => {
     expect(isNonNarrative({ title: 'by Tracy Wolff', wordCount: 1000 })).toBe(true);
+  });
+
+  it('does not flag a story title that merely opens with "By"', () => {
+    expect(isNonNarrative({ title: 'By the Sea', wordCount: 1500 })).toBe(false);
+    expect(isNonNarrative({ title: 'By Nightfall', wordCount: 1500 })).toBe(false);
+  });
+
+  it('does not flag a story title that merely contains a front-matter word', () => {
+    expect(isNonNarrative({ title: 'Contents of the Box', wordCount: 1500 })).toBe(false);
+    expect(isNonNarrative({ title: 'Dedication of the Knights', wordCount: 1500 })).toBe(false);
+  });
+
+  it('matches a front-matter label with trailing punctuation', () => {
+    expect(isNonNarrative({ title: 'Dedication.', wordCount: 1000 })).toBe(true);
+    expect(isNonNarrative({ title: 'Contents ', wordCount: 1000 })).toBe(true);
   });
 
   it('does not flag a normal narrative chapter title', () => {
