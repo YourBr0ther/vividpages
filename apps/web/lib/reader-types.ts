@@ -12,18 +12,32 @@ export interface SceneRef {
   endOffset: number;
 }
 
-/** The latest finished storyboard for a scene, as the Reader needs it. */
-export interface SceneImageRef {
-  id: string;
-  /** The scene id — the version/regenerate APIs key on it. */
+/**
+ * One paragraph of a scene: its text and its absolute start offset into the
+ * chapter text. The offset lets the Reader match an illustration point's
+ * `charOffset` to the paragraph boundary it should sit before.
+ */
+export interface ScenePara {
+  text: string;
+  start: number;
+}
+
+/** A scene ready to render: its span plus its split paragraphs. */
+export type ChapterScene = SceneRef & { paragraphs: ScenePara[] };
+
+/**
+ * The latest finished storyboard for one illustration point, placed by its
+ * absolute `charOffset` into the chapter text. `subjectId` is the point id —
+ * the version/regenerate APIs key on it.
+ */
+export interface ChapterIllustration {
+  imageId: string;
   subjectId: string;
+  charOffset: number;
   width: number | null;
   height: number | null;
   version: number;
 }
-
-/** A scene ready to render: its span plus its illustration (when one exists). */
-export type ChapterScene = SceneRef & { image: SceneImageRef | null };
 
 /** One entry in the book's table of contents. */
 export interface ChapterMeta {
@@ -33,12 +47,17 @@ export interface ChapterMeta {
   sceneCount: number;
 }
 
-/** A chapter ready to render: full text plus its scenes (spans + art). */
+/**
+ * A chapter ready to render: full text, its scenes (spans + split paragraphs),
+ * and the chapter's illustration points (ordered by charOffset) that the Reader
+ * threads through the flowing prose.
+ */
 export interface ChapterPayload {
   idx: number;
   title: string | null;
   text: string;
   scenes: ChapterScene[];
+  illustrationPoints: ChapterIllustration[];
 }
 
 /** Display title for a chapter, falling back to its 1-based number. */

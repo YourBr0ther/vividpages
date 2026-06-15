@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { Lightbox } from '@/components/lightbox';
-import { chapterLabel, type ChapterPayload, type SceneImageRef } from '@/lib/reader-types';
+import { chapterLabel, type ChapterIllustration, type ChapterPayload } from '@/lib/reader-types';
 
 import { ChapterPicker } from './chapter-picker';
 import {
@@ -68,9 +68,7 @@ export function Reader({
   const [size, setSize] = useState<ReaderFontSize>('m');
   const [chromeHidden, setChromeHidden] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [lightbox, setLightbox] = useState<{ image: SceneImageRef; globalIdx: number } | null>(
-    null,
-  );
+  const [lightbox, setLightbox] = useState<ChapterIllustration | null>(null);
   // Quiet notice when the saved position landed mid-chapter (resuming to a
   // chapter's start is indistinguishable from just opening it — stay silent).
   const [resumedNotice, setResumedNotice] = useState(
@@ -251,8 +249,8 @@ export function Reader({
 
   // ---- Illustrations: lightbox + post-regenerate version swap --------------
 
-  const openLightbox = useCallback((image: SceneImageRef, globalIdx: number) => {
-    setLightbox({ image, globalIdx });
+  const openLightbox = useCallback((illustration: ChapterIllustration) => {
+    setLightbox(illustration);
   }, []);
 
   // A repaint finished while the lightbox was open: point the inline plate
@@ -262,10 +260,10 @@ export function Reader({
     (subjectId: string, fresh: { id: string; version: number }) => {
       const swap = (payload: ChapterPayload): ChapterPayload => ({
         ...payload,
-        scenes: payload.scenes.map((scene) =>
-          scene.image?.subjectId === subjectId
-            ? { ...scene, image: { ...scene.image, ...fresh } }
-            : scene,
+        illustrationPoints: payload.illustrationPoints.map((point) =>
+          point.subjectId === subjectId
+            ? { ...point, imageId: fresh.id, version: fresh.version }
+            : point,
         ),
       });
       for (const [idx, payload] of chapterCache.current) {
@@ -273,8 +271,8 @@ export function Reader({
       }
       setChapter(swap);
       setLightbox((open) =>
-        open && open.image.subjectId === subjectId
-          ? { ...open, image: { ...open.image, ...fresh } }
+        open && open.subjectId === subjectId
+          ? { ...open, imageId: fresh.id, version: fresh.version }
           : open,
       );
     },
@@ -386,12 +384,16 @@ export function Reader({
       chapter.scenes.map((scene, i) => ({
         globalIdx: scene.globalIdx,
         isFirst: i === 0,
-        image: scene.image,
-        paragraphs: chapter.text
-          .slice(scene.startOffset, scene.endOffset)
-          .split('\n\n')
-          .map((paragraph) => paragraph.trim())
-          .filter(Boolean),
+        paragraphs: scene.paragraphs,
+        // The chapter's points are sorted by charOffset; a point belongs to the
+        // scene whose [startOffset, endOffset) contains its offset. The last
+        // scene keeps its upper bound open so a point at the very end of the
+        // chapter (== final endOffset) still renders.
+        points: chapter.illustrationPoints.filter(
+          (point) =>
+            point.charOffset >= scene.startOffset &&
+            (i === chapter.scenes.length - 1 || point.charOffset < scene.endOffset),
+        ),
       })),
     [chapter],
   );
@@ -485,8 +487,8 @@ export function Reader({
                 globalIdx={scene.globalIdx}
                 paragraphs={scene.paragraphs}
                 isFirstInChapter={scene.isFirst}
-                image={scene.image}
-                onImageOpen={openLightbox}
+                points={scene.points}
+                onIllustrationOpen={openLightbox}
               />
             ))}
           </div>
@@ -582,13 +584,13 @@ export function Reader({
 
       {lightbox ? (
         <Lightbox
-          imageId={lightbox.image.id}
-          subject={{ kind: 'scene_storyboard', id: lightbox.image.subjectId }}
-          title={`Scene ${lightbox.globalIdx + 1}`}
-          width={lightbox.image.width}
-          height={lightbox.image.height}
+          imageId={lightbox.imageId}
+          subject={{ kind: 'scene_storyboard', id: lightbox.subjectId }}
+          title="Illustration"
+          width={lightbox.width}
+          height={lightbox.height}
           onClose={() => setLightbox(null)}
-          onRegenerated={(fresh) => handleRegenerated(lightbox.image.subjectId, fresh)}
+          onRegenerated={(fresh) => handleRegenerated(lightbox.subjectId, fresh)}
         />
       ) : null}
     </div>

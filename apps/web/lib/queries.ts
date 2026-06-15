@@ -3,6 +3,7 @@ import {
   chapters,
   characters,
   getDb,
+  illustrationPoints,
   images,
   pipelineRuns,
   readingProgress,
@@ -13,7 +14,13 @@ import {
 } from '@vividpages/db';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 
-import type { ChapterMeta, ChapterPayload, SceneImageRef, SceneRef } from './reader-types';
+import type {
+  ChapterIllustration,
+  ChapterMeta,
+  ChapterPayload,
+  ScenePara,
+  SceneRef,
+} from './reader-types';
 
 export type BookRow = typeof books.$inferSelect;
 export type PipelineRunRow = typeof pipelineRuns.$inferSelect;
@@ -121,6 +128,15 @@ export async function listChaptersWithScenes(
   });
 }
 
+/** The latest finished image for one subject, as the Reader/gallery need it. */
+interface LatestImage {
+  id: string;
+  subjectId: string;
+  width: number | null;
+  height: number | null;
+  version: number;
+}
+
 /**
  * The latest 'done' image per subject for a book+kind, as ONE grouped query
  * (no per-subject N+1): fetch every finished row, newest version first, and
@@ -129,7 +145,7 @@ export async function listChaptersWithScenes(
 async function latestDoneImagesBySubject(
   bookId: string,
   kind: ImageKind,
-): Promise<Map<string, SceneImageRef>> {
+): Promise<Map<string, LatestImage>> {
   const rows = await getDb()
     .select({
       id: images.id,
@@ -142,7 +158,7 @@ async function latestDoneImagesBySubject(
     .where(and(eq(images.bookId, bookId), eq(images.kind, kind), eq(images.status, 'done')))
     .orderBy(desc(images.version));
 
-  const bySubject = new Map<string, SceneImageRef>();
+  const bySubject = new Map<string, LatestImage>();
   for (const row of rows) {
     if (row.subjectId && !bySubject.has(row.subjectId)) {
       bySubject.set(row.subjectId, { ...row, subjectId: row.subjectId });
@@ -152,8 +168,35 @@ async function latestDoneImagesBySubject(
 }
 
 /**
- * One chapter's full text plus its scenes — each with its latest finished
- * storyboard (or null mid-pipeline) — or undefined if no such chapter.
+ * Split a span of chapter text into paragraphs, each tagged with its absolute
+ * start offset into the chapter. Mirrors the reader's `\n\n` split while
+ * tracking where each kept paragraph began, so illustration points (whose
+ * `charOffset` is a paragraph-start offset) can be matched to a boundary.
+ */
+function splitScenePara(text: string, startOffset: number, endOffset: number): ScenePara[] {
+  const out: ScenePara[] = [];
+  const span = text.slice(startOffset, endOffset);
+  let cursor = startOffset;
+  for (const segment of span.split('\n\n')) {
+    const trimmed = segment.trim();
+    if (trimmed) {
+      // The kept paragraph's absolute start is the segment's start plus its
+      // leading whitespace (so it lines up with a paragraph-start charOffset).
+      const lead = segment.length - segment.trimStart().length;
+      out.push({ text: trimmed, start: cursor + lead });
+    }
+    // +2 for the '\n\n' separator consumed by split.
+    cursor += segment.length + 2;
+  }
+  return out;
+}
+
+/**
+ * One chapter's full text, its scenes (spans + split paragraphs), and the
+ * chapter's illustration points (latest finished storyboard per point, ordered
+ * by charOffset). Two grouped queries — scenes, and points joined to their
+ * latest done images — so no per-point or per-scene N+1. Undefined if no such
+ * chapter.
  */
 export async function getChapterWithScenes(
   bookId: string,
@@ -166,7 +209,7 @@ export async function getChapterWithScenes(
   });
   if (!chapter) return undefined;
 
-  const [sceneRows, artByScene] = await Promise.all([
+  const [sceneRows, pointRows, artBySubject] = await Promise.all([
     db
       .select({
         id: scenes.id,
@@ -178,18 +221,39 @@ export async function getChapterWithScenes(
       .from(scenes)
       .where(eq(scenes.chapterId, chapter.id))
       .orderBy(asc(scenes.idx)),
+    db
+      .select({ id: illustrationPoints.id, charOffset: illustrationPoints.charOffset })
+      .from(illustrationPoints)
+      .where(eq(illustrationPoints.chapterId, chapter.id))
+      .orderBy(asc(illustrationPoints.charOffset)),
     latestDoneImagesBySubject(bookId, 'scene_storyboard'),
   ]);
+
+  // A point only renders once its storyboard has finished; mid-pipeline points
+  // (no done image yet) are simply skipped, like the old image:null path.
+  const illustrationPointsOut: ChapterIllustration[] = [];
+  for (const point of pointRows) {
+    const art = artBySubject.get(point.id);
+    if (!art) continue;
+    illustrationPointsOut.push({
+      imageId: art.id,
+      subjectId: point.id,
+      charOffset: point.charOffset,
+      width: art.width,
+      height: art.height,
+      version: art.version,
+    });
+  }
 
   return {
     idx: chapter.idx,
     title: chapter.title,
     text: chapter.text,
-    // The scene id stays server-side; the image's subjectId carries it where needed.
-    scenes: sceneRows.map(({ id, ...scene }) => ({
+    scenes: sceneRows.map(({ id: _id, ...scene }) => ({
       ...scene,
-      image: artByScene.get(id) ?? null,
+      paragraphs: splitScenePara(chapter.text, scene.startOffset, scene.endOffset),
     })),
+    illustrationPoints: illustrationPointsOut,
   };
 }
 
