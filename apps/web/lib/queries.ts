@@ -9,6 +9,7 @@ import {
   scenes,
   userSettings,
   type ImageKind,
+  type PipelineRunStatus,
 } from '@vividpages/db';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 
@@ -346,6 +347,162 @@ export function isActiveRun(
     run?.status === 'running' && Date.now() - run.updatedAt.getTime() < ACTIVE_RUN_STALE_MS
   );
 }
+
+// ---------------------------------------------------------------------------
+// Jobs dashboard
+// ---------------------------------------------------------------------------
+
+/** A pipeline run paired with its book's title, for the cross-book jobs view. */
+export interface JobRun {
+  id: string;
+  bookId: string;
+  bookTitle: string;
+  stage: string;
+  status: PipelineRunStatus;
+  percent: number;
+  currentStep: string | null;
+  tokensIn: number;
+  tokensOut: number;
+  error: string | null;
+  startedAt: string;
+  updatedAt: string;
+  /** running + recent heartbeat (mirrors isActiveRun). */
+  active: boolean;
+}
+
+/** A failed image with the context needed to retry it. */
+export interface FailedImage {
+  id: string;
+  bookId: string;
+  bookTitle: string;
+  kind: ImageKind;
+  subjectId: string | null;
+  subjectName: string | null;
+  error: string | null;
+  createdAt: string;
+}
+
+export interface JobsData {
+  runs: JobRun[];
+  failedImages: FailedImage[];
+  /** Rough LLM token tally across all of the user's runs (analyze/profiles). */
+  totals: { tokensIn: number; tokensOut: number };
+}
+
+/** Human label per pipeline stage, for the jobs view. */
+export const STAGE_LABELS: Record<string, string> = {
+  ingest: 'Ingest',
+  segment: 'Segment',
+  analyze: 'Analyze',
+  profiles: 'Profiles',
+  imagine: 'Imagine',
+};
+
+/** Stages whose token tallies are meaningful (LLM stages). */
+const LLM_STAGES = new Set(['analyze', 'profiles']);
+
+/**
+ * Everything the Jobs dashboard renders, gathered across all of the user's
+ * books with no per-book N+1: one query for the user's book ids, then a
+ * recent-runs query and a failed-images query, both scoped with `inArray`
+ * over those ids and joined back to titles in memory. Character names are
+ * resolved in a single follow-up `inArray` over the failed portraits'
+ * subject ids.
+ */
+export async function getJobsData(userId: string): Promise<JobsData> {
+  const db = getDb();
+  const bookRows = await db
+    .select({ id: books.id, title: books.title })
+    .from(books)
+    .where(eq(books.userId, userId));
+
+  if (bookRows.length === 0) {
+    return { runs: [], failedImages: [], totals: { tokensIn: 0, tokensOut: 0 } };
+  }
+
+  const titleByBook = new Map(bookRows.map((b) => [b.id, b.title]));
+  const bookIds = bookRows.map((b) => b.id);
+
+  const [runRows, failedRows, totalRow] = await Promise.all([
+    db
+      .select()
+      .from(pipelineRuns)
+      .where(inArray(pipelineRuns.bookId, bookIds))
+      .orderBy(desc(pipelineRuns.updatedAt))
+      .limit(50),
+    db
+      .select({
+        id: images.id,
+        bookId: images.bookId,
+        kind: images.kind,
+        subjectId: images.subjectId,
+        error: images.error,
+        createdAt: images.createdAt,
+      })
+      .from(images)
+      .where(and(inArray(images.bookId, bookIds), eq(images.status, 'failed')))
+      .orderBy(desc(images.createdAt))
+      .limit(50),
+    db
+      .select({
+        tokensIn: sql<number>`coalesce(sum(${pipelineRuns.tokensIn}), 0)::bigint`,
+        tokensOut: sql<number>`coalesce(sum(${pipelineRuns.tokensOut}), 0)::bigint`,
+      })
+      .from(pipelineRuns)
+      .where(inArray(pipelineRuns.bookId, bookIds)),
+  ]);
+
+  // Resolve character names for failed portraits in one grouped lookup.
+  const portraitSubjectIds = failedRows
+    .filter((r) => r.kind === 'character_portrait' && r.subjectId)
+    .map((r) => r.subjectId as string);
+  const nameById = new Map<string, string>();
+  if (portraitSubjectIds.length > 0) {
+    const charRows = await db
+      .select({ id: characters.id, name: characters.name })
+      .from(characters)
+      .where(inArray(characters.id, portraitSubjectIds));
+    for (const c of charRows) nameById.set(c.id, c.name);
+  }
+
+  const runs: JobRun[] = runRows.map((r) => ({
+    id: r.id,
+    bookId: r.bookId,
+    bookTitle: titleByBook.get(r.bookId) ?? 'Untitled',
+    stage: r.stage,
+    status: r.status,
+    percent: r.percent,
+    currentStep: r.currentStep,
+    tokensIn: r.tokensIn,
+    tokensOut: r.tokensOut,
+    error: r.error,
+    startedAt: r.startedAt.toISOString(),
+    updatedAt: r.updatedAt.toISOString(),
+    active: isActiveRun(r),
+  }));
+
+  const failedImages: FailedImage[] = failedRows.map((r) => ({
+    id: r.id,
+    bookId: r.bookId,
+    bookTitle: titleByBook.get(r.bookId) ?? 'Untitled',
+    kind: r.kind,
+    subjectId: r.subjectId,
+    subjectName: r.subjectId ? (nameById.get(r.subjectId) ?? null) : null,
+    error: r.error,
+    createdAt: r.createdAt.toISOString(),
+  }));
+
+  return {
+    runs,
+    failedImages,
+    totals: {
+      tokensIn: Number(totalRow[0]?.tokensIn ?? 0),
+      tokensOut: Number(totalRow[0]?.tokensOut ?? 0),
+    },
+  };
+}
+
+export { LLM_STAGES };
 
 /**
  * The provider/model the pipeline would use for this book, resolved the same

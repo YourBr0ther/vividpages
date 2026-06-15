@@ -3,19 +3,6 @@ import { redirect } from 'next/navigation';
 
 import { auth, signOut } from '@/auth';
 
-/** Nav destinations that exist later in the build; shown disabled for now. */
-function DisabledNavLink({ label }: { label: string }) {
-  return (
-    <span
-      aria-disabled="true"
-      title="Coming soon"
-      className="cursor-not-allowed select-none rounded-full px-3 py-1.5 text-stone-600"
-    >
-      {label}
-    </span>
-  );
-}
-
 /**
  * Authenticated app shell: candlelit-ink atmosphere, top nav with the
  * wordmark, primary links, and the session user's identity + sign-out.
@@ -51,7 +38,12 @@ export default async function AppLayout({
             >
               Library
             </Link>
-            <DisabledNavLink label="Jobs" />
+            <Link
+              href="/jobs"
+              className="rounded-full px-3 py-1.5 font-medium text-stone-300 transition hover:bg-stone-800/50 hover:text-parchment"
+            >
+              Jobs
+            </Link>
             <Link
               href="/settings"
               className="rounded-full px-3 py-1.5 font-medium text-stone-300 transition hover:bg-stone-800/50 hover:text-parchment"
