@@ -1,0 +1,44 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="VividPages">
+  <!-- Maskable variant: same mark, but the glyph is scaled into the central
+       safe zone (~60%) so platform masks (circle, squircle) never clip it,
+       while the deep-ink ground bleeds to every edge. -->
+  <defs>
+    <radialGradient id="glowM" cx="50%" cy="58%" r="70%">
+      <stop offset="0%" stop-color="#e09b3b" stop-opacity="0.40" />
+      <stop offset="45%" stop-color="#a8631f" stop-opacity="0.15" />
+      <stop offset="100%" stop-color="#131110" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="pageLM" x1="84" y1="150" x2="256" y2="372" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#f4ecda" />
+      <stop offset="100%" stop-color="#d8cdb4" />
+    </linearGradient>
+    <linearGradient id="pageRM" x1="428" y1="150" x2="256" y2="372" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#efe6d2" />
+      <stop offset="100%" stop-color="#cdc1a6" />
+    </linearGradient>
+    <linearGradient id="spineM" x1="256" y1="150" x2="256" y2="388" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#fcd9a4" />
+      <stop offset="55%" stop-color="#e09b3b" />
+      <stop offset="100%" stop-color="#a8631f" />
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" fill="#131110" />
+  <rect width="512" height="512" fill="url(#glowM)" />
+
+  <!-- Scale the mark to ~0.62 around the canvas center (256,256). -->
+  <g transform="translate(256 256) scale(0.62) translate(-256 -256)">
+    <path d="M256 150 L96 184 Q84 186 84 199 L84 348 Q84 360 96 358 L256 360 Z" fill="url(#pageLM)" />
+    <path d="M256 150 L416 184 Q428 186 428 199 L428 348 Q428 360 416 358 L256 360 Z" fill="url(#pageRM)" />
+    <g stroke="#7c6a4c" stroke-opacity="0.32" stroke-width="6" stroke-linecap="round">
+      <line x1="120" y1="222" x2="232" y2="232" />
+      <line x1="120" y1="252" x2="232" y2="262" />
+      <line x1="120" y1="282" x2="232" y2="292" />
+      <line x1="280" y1="232" x2="392" y2="222" />
+      <line x1="280" y1="262" x2="392" y2="252" />
+      <line x1="280" y1="292" x2="392" y2="282" />
+    </g>
+    <path d="M256 150 L256 360" stroke="url(#spineM)" stroke-width="14" stroke-linecap="round" />
+    <path d="M204 184 L256 372 L308 184" stroke="url(#spineM)" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+  </g>
+</svg>
