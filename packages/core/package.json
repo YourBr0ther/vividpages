@@ -16,7 +16,8 @@
     "./pipeline/*": "./src/pipeline/*.ts",
     "./analysis/*": "./src/analysis/*.ts",
     "./characters/*": "./src/characters/*.ts",
-    "./imaging/*": "./src/imaging/*.ts"
+    "./imaging/*": "./src/imaging/*.ts",
+    "./illustration/*": "./src/illustration/*.ts"
   },
   "scripts": {
     "test": "vitest run"
