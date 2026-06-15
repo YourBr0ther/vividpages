@@ -69,7 +69,18 @@ describe('buildIllustrationPlanPrompt', () => {
     expect(prompt).not.toContain('[... omitted ...]');
   });
 
-  it('truncates the middle of an over-long chapter, keeping head and tail', () => {
+  it('sends a typical full-length chapter (~40k chars) untruncated', () => {
+    // A real chapter (e.g. the 32k-char Prologue) easily fits the model's
+    // context; only pathologically huge chapters should be clipped.
+    const head = 'HEAD-MARKER. ';
+    const tail = ' TAIL-MARKER.';
+    const chapterText = head + 'x'.repeat(40_000) + tail;
+    const { prompt } = buildIllustrationPlanPrompt({ ...base, chapterText });
+    expect(prompt).toContain(chapterText);
+    expect(prompt).not.toContain('[... omitted ...]');
+  });
+
+  it('truncates the middle of a pathologically huge chapter, keeping head and tail', () => {
     const head = 'HEAD-MARKER. ';
     const tail = ' TAIL-MARKER.';
     const chapterText = head + 'x'.repeat(MAX_PLAN_CHAPTER_CHARS * 2) + tail;

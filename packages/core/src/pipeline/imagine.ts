@@ -13,6 +13,7 @@ import {
   getDb,
   illustrationPoints,
   images,
+  sceneCharacters,
   scenes,
   stylePresets,
   type Db,
@@ -215,6 +216,81 @@ export function sceneContextForOffset(
   return { setting: src.setting, timeOfDay: src.timeOfDay, mood: src.mood };
 }
 
+/**
+ * A scene reduced to the fields needed to derive a fallback illustration point.
+ * `startOffset` is already a paragraph-start char offset into the chapter text.
+ */
+export interface FallbackScene {
+  startOffset: number;
+  keyVisualMoment: string | null;
+  summary: string | null;
+  /** Resolved roster character ids present in the scene. */
+  presentCharacterIds: string[];
+}
+
+/** A scene-derived fallback point (the same shape persisted for LLM points). */
+export interface FallbackPoint {
+  idx: number;
+  charOffset: number;
+  anchorQuote: string;
+  momentDescription: string;
+  presentCharacterIds: string[];
+  score: number;
+}
+
+/** Low default score for scene-derived points (LLM importance is 1–5). */
+const SCENE_FALLBACK_SCORE = 1;
+
+/**
+ * Builds up to `maxMoments` illustration points from a chapter's analyzed
+ * scenes, used when the LLM planner returns ZERO points for a narrative chapter
+ * so the chapter still gets art. Pure (no IO) and unit-tested.
+ *
+ * Each point's `momentDescription` is the scene's `keyVisualMoment` (else its
+ * `summary`); scenes with neither are dropped. `charOffset` is the scene's
+ * paragraph-start `startOffset`; `presentCharacterIds` are the scene's resolved
+ * characters; `score` is a low default. When there are more usable scenes than
+ * `maxMoments` the selection is spread evenly across them (endpoints kept);
+ * with fewer, every usable scene is used. Points get contiguous `idx` sorted by
+ * `charOffset`. Uses NO LLM call.
+ */
+export function sceneFallbackPoints(
+  scenes: FallbackScene[],
+  maxMoments: number,
+): FallbackPoint[] {
+  const usable = scenes
+    .map((s) => ({ ...s, desc: s.keyVisualMoment ?? s.summary }))
+    .filter((s): s is FallbackScene & { desc: string } => s.desc != null && s.desc.length > 0);
+  if (usable.length === 0 || maxMoments <= 0) return [];
+
+  // Evenly spread the selection when there are more scenes than slots; keep the
+  // endpoints. Otherwise use every usable scene.
+  let selected: Array<FallbackScene & { desc: string }>;
+  if (usable.length <= maxMoments) {
+    selected = usable;
+  } else if (maxMoments === 1) {
+    selected = [usable[0] as FallbackScene & { desc: string }];
+  } else {
+    const picked = new Set<number>();
+    for (let i = 0; i < maxMoments; i++) {
+      picked.add(Math.round((i / (maxMoments - 1)) * (usable.length - 1)));
+    }
+    selected = [...picked].sort((a, b) => a - b).map((i) => usable[i] as FallbackScene & { desc: string });
+  }
+
+  return selected
+    .slice()
+    .sort((a, b) => a.startOffset - b.startOffset)
+    .map((s, idx) => ({
+      idx,
+      charOffset: s.startOffset,
+      anchorQuote: '',
+      momentDescription: s.desc,
+      presentCharacterIds: s.presentCharacterIds,
+      score: SCENE_FALLBACK_SCORE,
+    }));
+}
+
 interface IllustrationPointRow {
   id: string;
   chapterId: string;
@@ -289,6 +365,56 @@ async function loadChapters(db: Db, bookId: string): Promise<ChapterRow[]> {
     .from(chapters)
     .where(eq(chapters.bookId, bookId))
     .orderBy(asc(chapters.idx));
+}
+
+/**
+ * Per-chapter analyzed scenes (with their resolved present-character ids) used
+ * to derive fallback illustration points when the planner returns zero. Keyed
+ * by chapterId, scenes in reading order (globalIdx asc). Only 'done' scenes.
+ */
+async function loadFallbackScenesByChapter(
+  db: Db,
+  bookId: string,
+): Promise<Map<string, FallbackScene[]>> {
+  const sceneRows = await db
+    .select({
+      id: scenes.id,
+      chapterId: scenes.chapterId,
+      globalIdx: scenes.globalIdx,
+      startOffset: scenes.startOffset,
+      summary: scenes.summary,
+      keyVisualMoment: scenes.keyVisualMoment,
+    })
+    .from(scenes)
+    .where(and(eq(scenes.bookId, bookId), eq(scenes.analysisStatus, 'done')))
+    .orderBy(asc(scenes.globalIdx));
+
+  const sceneIds = sceneRows.map((s) => s.id);
+  const charsBySceneId = new Map<string, string[]>();
+  if (sceneIds.length > 0) {
+    const links = await db
+      .select({ sceneId: sceneCharacters.sceneId, characterId: sceneCharacters.characterId })
+      .from(sceneCharacters)
+      .where(inArray(sceneCharacters.sceneId, sceneIds));
+    for (const link of links) {
+      const list = charsBySceneId.get(link.sceneId) ?? [];
+      list.push(link.characterId);
+      charsBySceneId.set(link.sceneId, list);
+    }
+  }
+
+  const byChapter = new Map<string, FallbackScene[]>();
+  for (const s of sceneRows) {
+    const list = byChapter.get(s.chapterId) ?? [];
+    list.push({
+      startOffset: s.startOffset,
+      keyVisualMoment: s.keyVisualMoment,
+      summary: s.summary,
+      presentCharacterIds: charsBySceneId.get(s.id) ?? [],
+    });
+    byChapter.set(s.chapterId, list);
+  }
+  return byChapter;
 }
 
 /** The planner's character roster: every character with an appearance token. */
@@ -466,6 +592,8 @@ async function planIllustrationPoints(args: {
 
   const roster = await loadRoster(db, bookId);
   const chapterRows = await loadChapters(db, bookId);
+  // Analyzed scenes per chapter — the safety net when the planner returns zero.
+  const fallbackScenesByChapter = await loadFallbackScenesByChapter(db, bookId);
 
   // Idempotent rebuild: wipe prior points + storyboards before re-planning.
   await rebuildResetStoryboards(db, bookId, log);
@@ -499,14 +627,34 @@ async function planIllustrationPoints(args: {
       });
       await incrementRunTokens(runId, result.tokensIn, result.tokensOut);
 
-      if (result.points.length > 0) {
+      // Robust invariant: a narrative chapter must never be left unillustrated.
+      // If the LLM returned zero moments (e.g. it returned isNarrative true with
+      // an empty array for a long/truncated chapter), derive points from the
+      // chapter's analyzed scenes — no extra LLM call. Degrades gracefully to
+      // the old per-scene behavior for just this chapter.
+      let points = result.points;
+      if (points.length === 0) {
+        const fallback = sceneFallbackPoints(
+          fallbackScenesByChapter.get(chapter.id) ?? [],
+          maxMoments,
+        );
+        if (fallback.length > 0) {
+          log(
+            `chapter ${chapter.idx}: planner returned 0 points; ` +
+              `fell back to ${fallback.length} scene-derived point(s)`,
+          );
+          points = fallback;
+        }
+      }
+
+      if (points.length > 0) {
         // Insert per-chapter, committed incrementally: a later chapter's failure
         // leaves earlier chapters' points persisted (stamped with this runId), so
         // a retry of this run resumes via the shouldReplan gate rather than
         // re-planning. Each point carries runId so Phase 0 can tell a retry of
         // THIS run from a genuinely fresh "Generate art" run.
         await db.insert(illustrationPoints).values(
-          result.points.map((p) => ({
+          points.map((p) => ({
             bookId,
             chapterId: chapter.id,
             runId,
@@ -520,8 +668,8 @@ async function planIllustrationPoints(args: {
         );
       }
       planned++;
-      pointCount += result.points.length;
-      log(`chapter ${chapter.idx}: planned ${result.points.length}/${maxMoments} point(s)`);
+      pointCount += points.length;
+      log(`chapter ${chapter.idx}: planned ${points.length}/${maxMoments} point(s)`);
     } catch (err) {
       if (!(err instanceof StructuredOutputError) && !(err instanceof OllamaError)) throw err;
       // Systemic LLM failure: every subsequent chapter would fail too — abort

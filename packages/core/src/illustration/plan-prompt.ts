@@ -18,8 +18,14 @@ export interface IllustrationPlanPromptArgs {
   bookTitle: string;
 }
 
-/** Chapter text beyond this is middle-truncated with an omitted marker. */
-export const MAX_PLAN_CHAPTER_CHARS = 28_000;
+/**
+ * Chapter text beyond this is middle-truncated with an omitted marker. A single
+ * chapter easily fits llama3.1:8b's 128k-token context (≈120k chars ≈ ~30k
+ * tokens), so typical chapters — including a 32k-char Prologue — are sent in
+ * FULL; only pathologically huge chapters are clipped, since over-aggressive
+ * truncation makes the model return zero moments for long input.
+ */
+export const MAX_PLAN_CHAPTER_CHARS = 120_000;
 
 const OMITTED_MARKER = '[... omitted ...]';
 
