@@ -5,6 +5,7 @@ import {
   planChapterIllustrations,
   type PlanRosterMember,
 } from '../src/illustration/plan';
+import { locateQuote } from '../src/illustration/locate';
 
 const OLLAMA_URL = process.env.OLLAMA_URL;
 const MODEL = process.env.OLLAMA_MODEL ?? 'llama3.1:8b';
@@ -71,7 +72,7 @@ describe('planChapterIllustrations (unit, fake LLM)', () => {
     expect(out.tokensOut).toBe(22);
   });
 
-  it('drops moments whose anchor quote does not resolve', async () => {
+  it('keeps an unresolvable moment via a fallback offset (never silently dropped)', async () => {
     const llm = fakeLLM({
       isNarrative: true,
       moments: [
@@ -95,9 +96,80 @@ describe('planChapterIllustrations (unit, fake LLM)', () => {
       maxMoments: 3,
       llm,
     });
-    expect(out.points).toHaveLength(1);
-    expect(out.points[0]!.momentDescription).toBe('the engineer fights the reactor');
-    expect(out.points[0]!.presentCharacterIds).toEqual(['id-jonas']);
+    // Both moments are kept: the resolved one and the unresolvable one (fallback).
+    expect(out.points).toHaveLength(2);
+    const descs = out.points.map((p) => p.momentDescription);
+    expect(descs).toContain('the engineer fights the reactor');
+    expect(descs).toContain('a ghost moment');
+    // All offsets are valid, in range, and distinct.
+    const offsets = out.points.map((p) => p.charOffset);
+    for (const o of offsets) {
+      expect(o).toBeGreaterThanOrEqual(0);
+      expect(o).toBeLessThan(CHAPTER_TEXT.length);
+    }
+    expect(new Set(offsets).size).toBe(offsets.length);
+  });
+
+  it('places K points for a K-moment narrative chapter even when ALL anchors fail', async () => {
+    const llm = fakeLLM({
+      isNarrative: true,
+      moments: [
+        { anchorQuote: 'absent quote one', description: 'm1', characters: [], importance: 5 },
+        { anchorQuote: 'absent quote two', description: 'm2', characters: [], importance: 4 },
+        { anchorQuote: 'absent quote three', description: 'm3', characters: [], importance: 3 },
+      ],
+    });
+    const out = await planChapterIllustrations({
+      chapter: CHAPTER,
+      roster: ROSTER,
+      maxMoments: 3,
+      llm,
+    });
+    expect(out.points).toHaveLength(3);
+    const offsets = out.points.map((p) => p.charOffset);
+    // 3 distinct, in-range, spread offsets.
+    expect(new Set(offsets).size).toBe(3);
+    for (const o of offsets) {
+      expect(o).toBeGreaterThanOrEqual(0);
+      expect(o).toBeLessThan(CHAPTER_TEXT.length);
+    }
+    // Non-decreasing for placement.
+    for (let i = 1; i < offsets.length; i++) {
+      expect(offsets[i]!).toBeGreaterThanOrEqual(offsets[i - 1]!);
+    }
+    // idx contiguous.
+    expect(out.points.map((p) => p.idx)).toEqual([0, 1, 2]);
+  });
+
+  it('fallback offsets do not collide with a resolved moment offset', async () => {
+    const llm = fakeLLM({
+      isNarrative: true,
+      moments: [
+        {
+          anchorQuote: 'Jonas crouched beside the failing reactor',
+          description: 'resolved',
+          characters: ['Jonas'],
+          importance: 5,
+        },
+        { anchorQuote: 'absent one', description: 'fb1', characters: [], importance: 4 },
+        { anchorQuote: 'absent two', description: 'fb2', characters: [], importance: 3 },
+      ],
+    });
+    const out = await planChapterIllustrations({
+      chapter: CHAPTER,
+      roster: ROSTER,
+      maxMoments: 3,
+      llm,
+    });
+    expect(out.points).toHaveLength(3);
+    const offsets = out.points.map((p) => p.charOffset);
+    expect(new Set(offsets).size).toBe(3);
+    const resolvedOffset = locateQuote(CHAPTER_TEXT, 'Jonas crouched beside the failing reactor');
+    const fallbacks = out.points.filter((p) => p.momentDescription !== 'resolved');
+    expect(fallbacks).toHaveLength(2);
+    for (const p of fallbacks) {
+      expect(p.charOffset).not.toBe(resolvedOffset);
+    }
   });
 
   it('resolves character names + aliases and drops unmatched names', async () => {

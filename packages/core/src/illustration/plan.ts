@@ -8,7 +8,7 @@
 import { completeStructured, type LLM } from '@vividpages/ai';
 
 import { findRosterMatch } from '../analysis/roster';
-import { locateQuote } from './locate';
+import { locateQuote, paragraphOffsets } from './locate';
 import { buildIllustrationPlanPrompt } from './plan-prompt';
 import { chapterPlanSchema } from './plan-schema';
 
@@ -61,11 +61,18 @@ export interface PlanChapterIllustrationsResult {
  * Plans illustration moments for a single chapter.
  *
  * 1. Structured LLM call (repair-retry, low temperature).
- * 2. Non-narrative → no points.
- * 3. Each moment: resolve its anchor quote to an offset (drop if unresolved)
- *    and its character names to roster ids (drop unmatched names; not fatal).
+ * 2. Non-narrative → no points (this exclusion path is intentional).
+ * 3. Each moment: resolve its anchor quote to an offset and its character names
+ *    to roster ids (drop unmatched names; not fatal). Unresolvable anchors are
+ *    NOT dropped — they are assigned a fallback offset (see below) so a
+ *    narrative chapter never silently loses all its moments to anchor failure.
  * 4. Keep the top `maxMoments` by importance (stable tie-break on input order),
  *    then sort by `charOffset` ascending and assign contiguous `idx`.
+ *
+ * Fallback placement: unresolvable moments are spread evenly across the
+ * chapter's paragraph-start offsets (proportional to their kept order),
+ * skipping offsets already taken by resolved moments or earlier fallbacks.
+ * Invariant: a narrative chapter that planned K moments yields K points.
  */
 export async function planChapterIllustrations(
   args: PlanChapterIllustrationsArgs,
@@ -95,10 +102,12 @@ export async function planChapterIllustrations(
   }
 
   // Resolve each moment's anchor + characters; remember input order for stable
-  // tie-breaking before we re-order by offset.
+  // tie-breaking before we re-order by offset. Unresolved moments get
+  // charOffset=null here and are assigned a fallback offset afterwards so they
+  // are never silently dropped.
   interface Resolved {
     order: number;
-    charOffset: number;
+    charOffset: number | null;
     anchorQuote: string;
     momentDescription: string;
     presentCharacterIds: string[];
@@ -106,14 +115,11 @@ export async function planChapterIllustrations(
   }
 
   const resolved: Resolved[] = [];
-  let dropped = 0;
+  let resolvedCount = 0;
 
   result.value.moments.forEach((moment, order) => {
     const charOffset = locateQuote(chapter.text, moment.anchorQuote);
-    if (charOffset === null) {
-      dropped += 1;
-      return;
-    }
+    if (charOffset !== null) resolvedCount += 1;
 
     const presentCharacterIds: string[] = [];
     for (const name of moment.characters) {
@@ -133,15 +139,60 @@ export async function planChapterIllustrations(
     });
   });
 
-  if (dropped > 0) {
+  // Assign fallback offsets to unresolved moments: spread them across the
+  // chapter's paragraph-start offsets, skipping any offset already taken by a
+  // resolved moment (or an earlier fallback). Keeps offsets distinct so dedupe
+  // never collapses two distinct moments onto each other.
+  const unresolved = resolved.filter((r) => r.charOffset === null);
+  if (unresolved.length > 0) {
+    const paraOffsets = paragraphOffsets(chapter.text);
+    const taken = new Set<number>(
+      resolved.filter((r) => r.charOffset !== null).map((r) => r.charOffset as number),
+    );
+    const free = paraOffsets.filter((o) => !taken.has(o));
+    // Candidate offsets, preferring unused paragraph starts; fall back to all
+    // paragraph starts (then 0) if every paragraph is already taken.
+    const candidates = free.length > 0 ? free : paraOffsets.length > 0 ? paraOffsets : [0];
+
+    unresolved.forEach((moment, i) => {
+      // Spread proportionally across the candidate paragraph starts.
+      const pos =
+        unresolved.length === 1
+          ? Math.floor(candidates.length / 2)
+          : Math.round((i / (unresolved.length - 1)) * (candidates.length - 1));
+      let pick = candidates[Math.min(pos, candidates.length - 1)] as number;
+      // Ensure distinctness against already-assigned fallbacks.
+      while (taken.has(pick)) {
+        const next = candidates.find((o) => !taken.has(o));
+        if (next === undefined) break; // ran out of distinct slots; accept overlap
+        pick = next;
+      }
+      moment.charOffset = pick;
+      taken.add(pick);
+    });
+  }
+
+  const fallbackCount = unresolved.length;
+  if (fallbackCount > 0) {
     // eslint-disable-next-line no-console
     console.debug(
-      `[illustration.plan] chapter ${chapter.id}: dropped ${dropped} moment(s) with unresolvable anchor quotes`,
+      `[illustration.plan] chapter ${chapter.id}: ${resolvedCount} moment(s) resolved, `
+        + `${fallbackCount} placed via fallback offset (unresolvable anchor quotes)`,
     );
   }
 
+  // Every moment now has a concrete offset (resolved or fallback). Narrow the
+  // type for the placement step.
+  interface Placed extends Resolved {
+    charOffset: number;
+  }
+  const placed: Placed[] = resolved.map((m) => ({
+    ...m,
+    charOffset: m.charOffset ?? 0,
+  }));
+
   // Keep the top `maxMoments` by importance desc, stable on input order.
-  const kept = resolved
+  const kept = placed
     .slice()
     .sort((a, b) => b.importance - a.importance || a.order - b.order)
     .slice(0, Math.max(0, maxMoments));
