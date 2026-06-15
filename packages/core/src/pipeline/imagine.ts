@@ -1,4 +1,4 @@
-import { ComfyUIError, type ImageGen } from '@vividpages/ai';
+import { isImageProviderError, isSystemicImageError, type ImageGen } from '@vividpages/ai';
 import {
   books,
   characters,
@@ -21,12 +21,10 @@ import {
   type CharacterForPrompt,
 } from '../imaging/prompt';
 import type { ImagineJobPayload } from '../queues';
+import { redactSecrets } from '../redact';
 import { putObject } from '../storage';
 import { resolveImageGen } from './llm';
 import { completeRun, isRunSuperseded, reportProgress, setBookStatus } from './progress';
-
-/** ComfyUIError codes that mean the server is gone — no image can succeed. */
-const SYSTEMIC_COMFYUI_CODES = new Set(['NETWORK', 'TIMEOUT']);
 
 /**
  * A home GPU box blips: a single dropped health ping or one slow generation is
@@ -209,10 +207,6 @@ async function loadExistingImages(db: Db, bookId: string): Promise<ExistingImage
   return { done, maxVersion };
 }
 
-function isSystemicImageError(err: unknown): boolean {
-  return err instanceof ComfyUIError && SYSTEMIC_COMFYUI_CODES.has(err.code);
-}
-
 /**
  * Imagine stage: one image per significant character (portrait) and per
  * analyzed scene (storyboard frame), generated sequentially (one GPU),
@@ -392,9 +386,10 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
         } catch (genErr) {
           if (!isSystemicImageError(genErr) || attempt >= TRANSIENT_RETRY_ATTEMPTS) throw genErr;
           const backoff = TRANSIENT_BACKOFF_MS[attempt - 1] ?? 30_000;
+          const code = isImageProviderError(genErr) ? genErr.code : undefined;
           log(
             `${item.kind} ${item.subjectId} transient error ` +
-              `(${(genErr as ComfyUIError).code}), retry ${attempt}/${TRANSIENT_RETRY_ATTEMPTS} in ${backoff}ms`,
+              `(${code}), retry ${attempt}/${TRANSIENT_RETRY_ATTEMPTS} in ${backoff}ms`,
           );
           await sleep(backoff);
         }
@@ -456,7 +451,7 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
           model: imageGen.model,
           params: { width: item.width, height: item.height, workflow: WORKFLOW },
           status: 'failed',
-          error: message,
+          error: redactSecrets(message),
           version: item.version,
         });
       } catch (recordErr) {
@@ -477,22 +472,22 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
         );
         if (consecutiveSystemic >= CONSECUTIVE_SYSTEMIC_LIMIT) {
           throw new Error(
-            `imagine: ${consecutiveSystemic} consecutive ComfyUI failures — ` +
-              `aborting as systemic (last: ${message})`,
+            `imagine: ${consecutiveSystemic} consecutive image-provider failures — ` +
+              `aborting as systemic (last: ${redactSecrets(message)})`,
           );
         }
         completed++;
         continue;
       }
       // Unexpected (sharp/storage/db): not a per-image generation problem.
-      if (!(err instanceof ComfyUIError)) throw err;
+      if (!isImageProviderError(err)) throw err;
 
       failed++;
       log(`${item.kind} ${item.subjectId} v${item.version} failed: ${message}`);
       if (failed === attempted && attempted >= EARLY_FAILURE_WINDOW) {
         throw new Error(
           `imagine: first ${attempted} generations all failed — aborting as systemic ` +
-            `(last error: ${message})`,
+            `(last error: ${redactSecrets(message)})`,
         );
       }
       // Otherwise: one bad prompt must never block the whole book.

@@ -20,6 +20,7 @@ import {
   resolveWithEmbedding,
 } from '../characters/dedupe';
 import type { ProfilesJobPayload } from '../queues';
+import { redactSecrets } from '../redact';
 import { resolveEmbedder, resolveLlm } from './llm';
 import {
   completeRun,
@@ -526,7 +527,7 @@ export async function runProfiles(payload: ProfilesJobPayload): Promise<void> {
       } catch (err) {
         if (isSystemicLlmError(err)) {
           throw new Error(
-            `profiles: systemic Ollama failure (${(err as OllamaError).code}): ${(err as Error).message}`,
+            `profiles: systemic Ollama failure (${(err as OllamaError).code}): ${redactSecrets((err as Error).message)}`,
           );
         }
         if (!(err instanceof StructuredOutputError) && !(err instanceof OllamaError)) throw err;

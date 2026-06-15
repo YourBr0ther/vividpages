@@ -1,4 +1,5 @@
 import { createLLM } from '@vividpages/ai';
+import { redactSecrets } from '@vividpages/core/redact';
 import { type ApiKeyProvider } from '@vividpages/db';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
@@ -62,7 +63,7 @@ export async function POST(request: NextRequest) {
     ]);
     return NextResponse.json(result, { status: 200 });
   } catch (err) {
-    const detail = err instanceof Error ? err.message : 'Unknown error.';
+    const detail = err instanceof Error ? redactSecrets(err.message) : 'Unknown error.';
     return NextResponse.json({ ok: false, detail }, { status: 200 });
   }
 }

@@ -24,10 +24,19 @@ export function toOpenAIError(err: unknown, context: string): OpenAIError {
     typeof (err as { status?: unknown })?.status === 'number'
       ? (err as { status: number }).status
       : undefined;
-  const code =
-    typeof (err as { type?: unknown })?.type === 'string'
-      ? (err as { type: string }).type
-      : undefined;
   const detail = err instanceof Error ? err.message : String(err);
+  // The SDK's connection/timeout errors carry no body, so `type` is undefined.
+  // Normalize them onto the same NETWORK/TIMEOUT vocabulary ComfyUI uses so
+  // callers can treat "the provider is unreachable" as systemic across both
+  // image providers. Timeout is a subclass of connection error — check it first.
+  const name = err instanceof Error ? err.name : '';
+  let code: string | undefined;
+  if (name === 'APIConnectionTimeoutError') {
+    code = 'TIMEOUT';
+  } else if (name === 'APIConnectionError') {
+    code = 'NETWORK';
+  } else if (typeof (err as { type?: unknown })?.type === 'string') {
+    code = (err as { type: string }).type;
+  }
   return new OpenAIError(`OpenAI ${context} failed: ${detail}`, { status, code });
 }

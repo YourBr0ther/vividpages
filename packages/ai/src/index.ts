@@ -44,6 +44,11 @@ export {
   type OpenAIImageGenOptions,
 } from './image/openai';
 export {
+  isImageProviderError,
+  isSystemicImageError,
+  systemicImageCodes,
+} from './image/errors';
+export {
   createEmbedder,
   createImageGen,
   createLLM,

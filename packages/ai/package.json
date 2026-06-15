@@ -16,6 +16,7 @@
     "./image/types": "./src/image/types.ts",
     "./image/comfyui": "./src/image/comfyui.ts",
     "./image/openai": "./src/image/openai.ts",
+    "./image/errors": "./src/image/errors.ts",
     "./registry": "./src/registry.ts"
   },
   "scripts": {

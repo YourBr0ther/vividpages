@@ -14,6 +14,7 @@ import { buildSceneAnalysisPrompt, type RosterEntry } from '../analysis/prompt';
 import { candidateNames, findRosterMatch, splitCompoundName } from '../analysis/roster';
 import { sceneAnalysisSchema, type SceneAnalysis } from '../analysis/schema';
 import { getQueue, type StageJobPayload } from '../queues';
+import { redactSecrets } from '../redact';
 import { resolveLlm } from './llm';
 import { incrementRunTokens, isRunSuperseded, reportProgress, setBookStatus } from './progress';
 
@@ -340,7 +341,7 @@ export async function runAnalyze({ bookId, runId }: StageJobPayload): Promise<vo
       if (attempted <= EARLY_FAILURE_WINDOW && failed > EARLY_FAILURE_WINDOW / 2) {
         throw new Error(
           `analyze: ${failed} of the first ${attempted} scenes failed — aborting as systemic ` +
-            `(last error: ${err.message})`,
+            `(last error: ${redactSecrets(err.message)})`,
         );
       }
       // Otherwise: a stray hard scene must never block the whole book.
