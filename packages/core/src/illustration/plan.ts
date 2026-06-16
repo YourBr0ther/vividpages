@@ -49,6 +49,8 @@ export interface PlanChapterIllustrationsArgs {
   llm: LLM;
   /** Optional book title for prompt context. */
   bookTitle?: string;
+  /** When true (opt-in, per-book), pass the mature fidelity instruction down. */
+  mature?: boolean;
 }
 
 export interface PlanChapterIllustrationsResult {
@@ -77,13 +79,14 @@ export interface PlanChapterIllustrationsResult {
 export async function planChapterIllustrations(
   args: PlanChapterIllustrationsArgs,
 ): Promise<PlanChapterIllustrationsResult> {
-  const { chapter, roster, maxMoments, llm, bookTitle = '' } = args;
+  const { chapter, roster, maxMoments, llm, bookTitle = '', mature = false } = args;
 
   const { system, prompt } = buildIllustrationPlanPrompt({
     chapterText: chapter.text,
     roster: roster.map((r) => ({ name: r.name, oneLine: r.oneLine })),
     maxMoments,
     bookTitle,
+    mature,
   });
 
   const result = await completeStructured(llm, {

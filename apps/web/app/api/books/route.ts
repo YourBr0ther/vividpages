@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { getQueue } from '@vividpages/core/queues';
 import { putObject } from '@vividpages/core/storage';
-import { books, getDb, pipelineRuns } from '@vividpages/db';
+import { books, getDb, pipelineRuns, userSettings } from '@vividpages/db';
 import { and, eq } from 'drizzle-orm';
 import { NextResponse, type NextRequest } from 'next/server';
 
@@ -67,6 +67,14 @@ export async function POST(request: NextRequest) {
   const epubObjectKey = `${userId}/${sha256}.epub`;
   await putObject('epubs', epubObjectKey, buf, 'application/epub+zip');
 
+  // Seed the new book's mature-content flag from the uploader's default
+  // (false when no settings row exists yet).
+  const settings = await db.query.userSettings.findFirst({
+    where: eq(userSettings.userId, userId),
+    columns: { matureContentDefault: true },
+  });
+  const matureContent = settings?.matureContentDefault ?? false;
+
   let book: typeof books.$inferSelect;
   let runId: string;
   try {
@@ -84,6 +92,7 @@ export async function POST(request: NextRequest) {
           sha256,
           epubObjectKey,
           status: 'ingesting',
+          matureContent,
         })
         .returning();
       if (!created) throw new Error('Book insert returned no row');

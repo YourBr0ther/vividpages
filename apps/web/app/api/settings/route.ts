@@ -15,6 +15,7 @@ const DEFAULTS = {
   imageModel: null as string | null,
   ollamaUrl: null as string | null,
   comfyuiUrl: null as string | null,
+  matureContentDefault: false,
 } as const;
 
 /** A URL override, or null when blank (= use the env default). */
@@ -35,6 +36,7 @@ const settingsSchema = z.object({
   imageModel: z.string().trim().max(120).nullable().or(z.literal('').transform(() => null)),
   ollamaUrl: urlOverride,
   comfyuiUrl: urlOverride,
+  matureContentDefault: z.boolean(),
 });
 
 /**
@@ -60,6 +62,7 @@ export async function GET() {
         imageModel: row.imageModel,
         ollamaUrl: row.ollamaUrl,
         comfyuiUrl: row.comfyuiUrl,
+        matureContentDefault: row.matureContentDefault,
       }
     : DEFAULTS;
 
