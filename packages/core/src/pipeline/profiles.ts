@@ -42,7 +42,7 @@ const MAX_RECONCILE_CHARACTERS = 60;
 
 type MergeVia = 'name' | 'embedding' | 'llm';
 
-interface SurvivorCharacter {
+export interface SurvivorCharacter {
   id: string;
   name: string;
   aliases: string[];
@@ -169,7 +169,7 @@ const reconciliationSchema = z.object({
     .default([]),
 });
 
-function buildReconciliationPrompt(
+export function buildReconciliationPrompt(
   bookTitle: string,
   survivors: SurvivorCharacter[],
 ): { system: string; prompt: string } {
@@ -192,14 +192,18 @@ function buildReconciliationPrompt(
     '',
     'Some entries may still refer to the SAME person: a nickname vs a full name ' +
       "(e.g. 'Becky' vs 'Rebecka'), a surname-only entry, a title, or a role epithet " +
-      "(e.g. \"Evie's boss\" when another entry IS that boss). Identify every group of " +
-      'entries that refer to the same person.',
+      "(e.g. \"Evie's boss\" when another entry IS that boss). A character is often " +
+      'named directly in some scenes and referred to only by a title or epithet (e.g. ' +
+      '"The Villain", "The King", "the captain") in others — these are the SAME person. ' +
+      'Use the provided descriptions to confirm the personal name and the title/epithet ' +
+      'describe one identity. Identify every group of entries that refer to the same person.',
     '',
     'Rules:',
     '- keep: the canonical entry — prefer the proper personal name with the most scenes.',
     '- absorb: the other entries for that same person.',
     '- Copy names EXACTLY as they appear in the list above (text before any parenthesis).',
     '- Never merge two characters who merely interact, are related, or work together; only merge entries that are provably the SAME person.',
+    '- A personal name and a standalone title/epithet (e.g. "Trystan" and "The Villain") refer to the same person when the descriptions show one identity — merge them; but a title/epithet only absorbs into the one character the book identifies as holding that role, never a different character who shares the scene.',
     "- A role epithet like \"X's boss\" may only be absorbed by the character the book explicitly identifies as holding that role — never by a colleague or bystander.",
     '- Distinct numbered/generic entries (e.g. "Intern 1" and "Intern 2") are DIFFERENT people.',
     '- When unsure, do NOT merge.',
