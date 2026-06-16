@@ -98,6 +98,11 @@ interface WorkItem {
   height: number;
   prompt: string;
   negative: string;
+  /**
+   * LoRAs to chain into this image's graph (issue #2). Empty → no graph
+   * surgery and byte-identical to the no-LoRA path.
+   */
+  loras: ResolvedLora[];
   /** Human-readable progress label ('Painting Evie (3/12)'). */
   step: string;
 }
@@ -117,7 +122,17 @@ function sanitizedProfile(value: unknown): CharacterProfile | null {
   return profile;
 }
 
-interface PortraitCharacter extends CharacterForPrompt {
+/**
+ * A character's optional LoRA chain config (issue #2). loraName null → no LoRA.
+ * `loraKeyword` lives on CharacterForPrompt (it feeds the prompt builder), so it
+ * is not duplicated here.
+ */
+interface CharacterLora {
+  loraName: string | null;
+  loraStrength: number | null;
+}
+
+interface PortraitCharacter extends CharacterForPrompt, CharacterLora {
   id: string;
 }
 
@@ -130,6 +145,9 @@ async function loadPortraitCharacters(db: Db, bookId: string): Promise<PortraitC
       role: characters.role,
       profile: characters.profile,
       appearanceToken: characters.appearanceToken,
+      loraName: characters.loraName,
+      loraKeyword: characters.loraKeyword,
+      loraStrength: characters.loraStrength,
     })
     .from(characters)
     .where(and(eq(characters.bookId, bookId), isNotNull(characters.appearanceToken)))
@@ -141,6 +159,9 @@ async function loadPortraitCharacters(db: Db, bookId: string): Promise<PortraitC
       name: r.name,
       appearanceToken: r.appearanceToken,
       profile: sanitizedProfile(r.profile),
+      loraName: r.loraName,
+      loraKeyword: r.loraKeyword,
+      loraStrength: r.loraStrength,
     }));
 }
 
@@ -316,16 +337,20 @@ async function loadIllustrationPoints(db: Db, bookId: string): Promise<Illustrat
     .orderBy(asc(illustrationPoints.chapterId), asc(illustrationPoints.idx));
 }
 
+/** A scene-cast member: prompt fields + optional LoRA config (issue #2). */
+interface CastMember extends CharacterForPrompt, CharacterLora {}
+
 /**
  * Loads the prompt cast for an illustration point: the present-character rows,
  * sanitized for prompting, capped at SCENE_CAST_LIMIT and ordered by overall
- * prominence (sceneCount desc) so the leads are described first.
+ * prominence (sceneCount desc) so the leads are described first. Carries each
+ * member's optional LoRA config (name/keyword/strength) for chain assembly.
  */
 async function loadPointCast(
   db: Db,
   bookId: string,
   characterIds: string[],
-): Promise<CharacterForPrompt[]> {
+): Promise<CastMember[]> {
   if (characterIds.length === 0) return [];
   const rows = await db
     .select({
@@ -333,6 +358,9 @@ async function loadPointCast(
       name: characters.name,
       appearanceToken: characters.appearanceToken,
       profile: characters.profile,
+      loraName: characters.loraName,
+      loraKeyword: characters.loraKeyword,
+      loraStrength: characters.loraStrength,
     })
     .from(characters)
     .where(and(eq(characters.bookId, bookId), inArray(characters.id, characterIds)))
@@ -341,7 +369,65 @@ async function loadPointCast(
     name: r.name,
     appearanceToken: r.appearanceToken,
     profile: sanitizedProfile(r.profile),
+    loraName: r.loraName,
+    loraKeyword: r.loraKeyword,
+    loraStrength: r.loraStrength,
   }));
+}
+
+/** Default LoRA strength when a character pins a LoRA but no strength. */
+const DEFAULT_LORA_STRENGTH = 1.0;
+/** Max distinct LoRAs chained onto one scene (VRAM/quality guard). */
+const SCENE_LORA_CHAIN_LIMIT = 3;
+
+/** One resolved LoRA destined for the adapter + provenance. */
+interface ResolvedLora {
+  name: string;
+  strengthModel: number;
+  strengthClip: number;
+}
+
+/**
+ * Maps a character's LoRA config to a single `ResolvedLora`, or null when the
+ * character has no LoRA (`loraName` unset). Strength defaults to
+ * DEFAULT_LORA_STRENGTH and applies to both model+clip (single-strength model).
+ * Pure (no IO), unit-testable.
+ */
+export function resolveCharacterLora(c: {
+  loraName: string | null;
+  loraStrength: number | null;
+}): ResolvedLora | null {
+  const name = c.loraName?.trim();
+  if (!name) return null;
+  const s = c.loraStrength ?? DEFAULT_LORA_STRENGTH;
+  return { name, strengthModel: s, strengthClip: s };
+}
+
+/**
+ * Assembles the scene LoRA chain from the present cast (already capped at
+ * SCENE_CAST_LIMIT and ordered by prominence): collects each member's LoRA,
+ * **dedupes by name** (same LoRA used once, first occurrence's strength wins),
+ * and caps the chain at SCENE_LORA_CHAIN_LIMIT keeping the most-prominent. When
+ * distinct LoRAs exceed the cap the dropped names are reported via `onDrop`
+ * (their prompt description still stands). Pure (no IO), unit-testable.
+ */
+export function assembleSceneLoras(
+  cast: Array<{ loraName: string | null; loraStrength: number | null }>,
+  onDrop?: (droppedNames: string[]) => void,
+): ResolvedLora[] {
+  const seen = new Set<string>();
+  const distinct: ResolvedLora[] = [];
+  for (const member of cast) {
+    const lora = resolveCharacterLora(member);
+    if (!lora || seen.has(lora.name)) continue;
+    seen.add(lora.name);
+    distinct.push(lora);
+  }
+  if (distinct.length <= SCENE_LORA_CHAIN_LIMIT) return distinct;
+  const kept = distinct.slice(0, SCENE_LORA_CHAIN_LIMIT);
+  const dropped = distinct.slice(SCENE_LORA_CHAIN_LIMIT).map((l) => l.name);
+  onDrop?.(dropped);
+  return kept;
 }
 
 interface ChapterRow {
@@ -806,10 +892,17 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
 
   const portraitItem = (c: PortraitCharacter, step: string): WorkItem => {
     const { prompt, negative } = buildPortraitPrompt({
-      character: c,
+      character: {
+        name: c.name,
+        appearanceToken: c.appearanceToken,
+        profile: c.profile,
+        loraKeyword: c.loraKeyword,
+      },
       style: styleFragment,
       mature: book.matureContent,
     });
+    // The one character's LoRA (if any); empty → no surgery, byte-identical.
+    const lora = resolveCharacterLora(c);
     return {
       kind: 'character_portrait',
       subjectId: c.id,
@@ -818,6 +911,7 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
       height: PORTRAIT_HEIGHT,
       prompt,
       negative,
+      loras: lora ? [lora] : [],
       step,
     };
   };
@@ -831,6 +925,8 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
     const ctx = sceneContextForOffset(chapterScenes, point.charOffset);
     const cast = await loadPointCast(db, bookId, point.presentCharacterIds);
     const { prompt, negative } = buildScenePrompt({
+      // CastMember extends CharacterForPrompt, so loraKeyword flows through to
+      // be woven into each member's clause.
       scene: {
         summary: point.momentDescription,
         setting: ctx.setting,
@@ -842,6 +938,14 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
       style: styleFragment,
       mature: book.matureContent,
     });
+    // Scene LoRA chain: present cast's LoRAs, deduped by name, capped; dropped
+    // names are logged (their prompt description still stands).
+    const loras = assembleSceneLoras(cast, (dropped) =>
+      log(
+        `point ${point.id}: dropped ${dropped.length} LoRA(s) from the scene chain ` +
+          `(cap ${SCENE_LORA_CHAIN_LIMIT}): ${dropped.join(', ')}`,
+      ),
+    );
     return {
       kind: 'scene_storyboard',
       subjectId: point.id,
@@ -850,6 +954,7 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
       height: SCENE_HEIGHT,
       prompt,
       negative,
+      loras,
       step,
     };
   };
@@ -932,6 +1037,8 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
             negative: item.negative,
             width: item.width,
             height: item.height,
+            // Empty → adapter returns a byte-identical no-LoRA graph.
+            loras: item.loras,
           });
           break;
         } catch (genErr) {
@@ -974,6 +1081,11 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
           height: result.height,
           workflow: WORKFLOW,
           durationMs: result.durationMs,
+          // Provenance (issue #2): the LoRAs actually applied. Omitted when none
+          // so no-LoRA rows are unchanged.
+          ...(item.loras.length > 0
+            ? { loras: item.loras.map((l) => ({ name: l.name, strength: l.strengthModel })) }
+            : {}),
         },
         objectKey,
         thumbObjectKey,

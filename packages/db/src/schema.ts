@@ -278,6 +278,16 @@ export const characters = pgTable(
     profile: jsonb(),
     /** Stable compiled prompt fragment reused verbatim in every image prompt. */
     appearanceToken: text(),
+    /**
+     * Optional per-character LoRA (issue #2). All three are nullable; a
+     * character is LoRA-enabled only when `loraName` is set, and a null
+     * `loraName` means today's behavior (no graph surgery, unchanged prompt).
+     */
+    loraName: text(),
+    /** Optional trigger word woven into the subject phrase (null/empty → none). */
+    loraKeyword: text(),
+    /** LoRA strength for both model+clip; app applies 1.0 when null. */
+    loraStrength: real(),
     embedding: vector({ dimensions: 768 }),
     embeddingModel: text(),
     sceneCount: integer().notNull().default(0),

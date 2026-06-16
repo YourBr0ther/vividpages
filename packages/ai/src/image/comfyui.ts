@@ -1,6 +1,6 @@
 import { randomUUID, webcrypto } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import type { GenerateOptions, ImageGen, ImageResult } from './types';
+import type { GenerateOptions, ImageGen, ImageResult, LoraSpec } from './types';
 
 /** A ComfyUI API-format workflow graph: node id → node. */
 export interface WorkflowNode {
@@ -90,6 +90,87 @@ export function patchWorkflow(template: WorkflowGraph, params: PatchParams): Wor
   return graph;
 }
 
+/** Smallest non-negative integer id not already used as a node key. */
+function nextNodeId(graph: WorkflowGraph): number {
+  let max = 0;
+  for (const id of Object.keys(graph)) {
+    const n = Number(id);
+    if (Number.isInteger(n) && n > max) max = n;
+  }
+  return max + 1;
+}
+
+/**
+ * Returns a deep-cloned copy of `graph` with a chain of `LoraLoader` nodes
+ * inserted between the checkpoint and the model/clip consumers. The input is
+ * never mutated.
+ *
+ * - Empty/undefined `loras` → the graph is returned UNCHANGED (deep-equal,
+ *   byte-identical), guaranteeing the no-LoRA path matches today exactly.
+ * - Otherwise each LoRA becomes one `LoraLoader` with a fresh unique id,
+ *   chained `checkpoint → lora₁ → … → loraₙ` (model output 0, clip output 1).
+ *   The KSampler `model` input and BOTH CLIPTextEncode `clip` inputs are then
+ *   repointed to the LAST loader. Nodes are located by `_meta.title`
+ *   (checkpoint/sampler/positive/negative) — the same robust scheme as
+ *   patchWorkflow.
+ */
+export function applyLoras(graph: WorkflowGraph, loras: LoraSpec[] | undefined): WorkflowGraph {
+  if (!loras || loras.length === 0) return structuredClone(graph);
+
+  const out = structuredClone(graph);
+  const byTitle = (title: string): WorkflowNode => {
+    const node = Object.values(out).find((n) => n._meta?.title === title);
+    if (!node) {
+      throw new ComfyUIError(
+        'BAD_RESPONSE',
+        `workflow template has no node titled '${title}'`,
+      );
+    }
+    return node;
+  };
+  const idByTitle = (title: string): string => {
+    const entry = Object.entries(out).find(([, n]) => n._meta?.title === title);
+    if (!entry) {
+      throw new ComfyUIError(
+        'BAD_RESPONSE',
+        `workflow template has no node titled '${title}'`,
+      );
+    }
+    return entry[0];
+  };
+
+  const checkpointId = idByTitle('checkpoint');
+  const sampler = byTitle('sampler');
+  const positive = byTitle('positive');
+  const negative = byTitle('negative');
+
+  // Chain off the checkpoint's MODEL (0) / CLIP (1) outputs, then off each
+  // preceding loader.
+  let prevId = checkpointId;
+  let nextId = nextNodeId(out);
+  for (const lora of loras) {
+    const id = String(nextId++);
+    out[id] = {
+      class_type: 'LoraLoader',
+      _meta: { title: `lora:${lora.name}` },
+      inputs: {
+        lora_name: lora.name,
+        strength_model: lora.strengthModel,
+        strength_clip: lora.strengthClip,
+        model: [prevId, 0],
+        clip: [prevId, 1],
+      },
+    };
+    prevId = id;
+  }
+
+  // Repoint consumers to the last loader (prevId).
+  sampler.inputs.model = [prevId, 0];
+  positive.inputs.clip = [prevId, 1];
+  negative.inputs.clip = [prevId, 1];
+  return out;
+}
+
 export interface ComfyUIImageGenOptions {
   baseUrl: string;
   /** Checkpoint filename on the server. Default Z-Image Turbo AIO. */
@@ -149,7 +230,7 @@ export class ComfyUIImageGen implements ImageGen {
       steps: opts.steps ?? this.defaultSteps,
       cfg: opts.cfg ?? this.defaultCfg,
     };
-    const graph = patchWorkflow(ZIMAGE_T2I_TEMPLATE, params);
+    const graph = applyLoras(patchWorkflow(ZIMAGE_T2I_TEMPLATE, params), opts.loras);
 
     const promptId = await this.enqueue(graph, deadline);
     const entry = await this.pollHistory(promptId, deadline);

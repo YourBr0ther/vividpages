@@ -28,6 +28,18 @@ export interface CharacterForPrompt {
   name: string;
   appearanceToken: string | null;
   profile: CharacterProfile | null;
+  /**
+   * Optional LoRA trigger keyword (issue #2). When non-empty it is woven into
+   * THIS character's subject phrase so the trigger binds to the right subject
+   * in multi-character scenes (Z-Image guidance: trigger near the subject).
+   * Null/absent/blank → output is byte-identical to the no-keyword path.
+   */
+  loraKeyword?: string | null;
+}
+
+/** The character's trigger keyword, trimmed; '' when null/absent/blank. */
+function keywordOf(c: CharacterForPrompt): string {
+  return (c.loraKeyword ?? '').trim();
 }
 
 export interface SceneForPrompt {
@@ -211,10 +223,14 @@ export function buildPortraitPrompt(args: {
 }): { prompt: string; negative: string } {
   const name = normalizeFragment(args.character.name);
   const description = renderCharacterDescription(args.character);
+  const keyword = keywordOf(args.character);
+  // Keyword leads the subject phrase: "{keyword}, {name}, {appearance}…". When
+  // absent the leading segment is just "{name}" exactly as before (byte-identical).
+  const head = keyword ? `${keyword}, ${name}` : name;
   const subject =
     description === name
-      ? `A three-quarter character portrait of ${name}`
-      : `A three-quarter character portrait of ${name}, ${description}`;
+      ? `A three-quarter character portrait of ${head}`
+      : `A three-quarter character portrait of ${head}, ${description}`;
 
   const prompt = [
     sentence(subject),
@@ -303,15 +319,21 @@ export function buildScenePrompt(args: {
   const cast = args.characters.slice(0, MAX_SCENE_CHARACTERS).map((c) => ({
     name: normalizeFragment(c.name),
     description: capWords(renderCharacterDescription(c), MAX_SCENE_DESCRIPTION_WORDS),
+    // Trigger keyword bound to THIS character; '' when none.
+    keyword: keywordOf(c),
   }));
 
   const castClause = (withDescriptions: boolean): string | null => {
     if (cast.length === 0) return null;
-    const rendered = cast.map((c) =>
-      withDescriptions && c.description && c.description !== c.name
-        ? `${c.name} (${c.description})`
-        : c.name,
-    );
+    const rendered = cast.map((c) => {
+      // The keyword always leads this character's clause so it stays bound to
+      // them even when the description is dropped under length pressure (never
+      // orphaned). No keyword → byte-identical to the prior clause.
+      const head = c.keyword ? `${c.keyword} ${c.name}` : c.name;
+      return withDescriptions && c.description && c.description !== c.name
+        ? `${head} (${c.description})`
+        : head;
+    });
     const list =
       rendered.length === 1
         ? rendered[0]

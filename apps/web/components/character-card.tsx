@@ -1,6 +1,7 @@
 import type { CastMember, CastRole } from '@/lib/queries';
 
 import { bindingFor } from './book-cover-art';
+import { CharacterLoraConfig } from './character-lora-config';
 import { PortraitLightbox } from './portrait-lightbox';
 
 /** Role badge tints: ember for leads, deep red for villains, quiet otherwise. */
@@ -136,6 +137,16 @@ export function CharacterCard({ member }: { member: CastMember }) {
             </p>
           </details>
         ) : null}
+
+        <CharacterLoraConfig
+          characterId={member.id}
+          characterName={member.name}
+          initial={{
+            loraName: member.loraName,
+            loraKeyword: member.loraKeyword,
+            loraStrength: member.loraStrength,
+          }}
+        />
       </div>
     </article>
   );
