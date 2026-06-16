@@ -8,6 +8,14 @@ export interface ImageResult {
   params: Record<string, unknown>;
 }
 
+/** One LoRA to stack onto the generation (issue #2). */
+export interface LoraSpec {
+  /** LoRA filename as installed on the ComfyUI server. */
+  name: string;
+  strengthModel: number;
+  strengthClip: number;
+}
+
 export interface GenerateOptions {
   prompt: string;
   negative?: string;
@@ -19,6 +27,11 @@ export interface GenerateOptions {
   seed?: number;
   steps?: number;
   cfg?: number;
+  /**
+   * Optional LoRAs to chain into the graph. Empty/absent → the generated
+   * workflow is byte-identical to the no-LoRA path.
+   */
+  loras?: LoraSpec[];
 }
 
 export interface ImageGen {
