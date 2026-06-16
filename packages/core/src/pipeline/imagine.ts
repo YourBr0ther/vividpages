@@ -33,6 +33,7 @@ import {
   type CharacterForPrompt,
 } from '../imaging/prompt';
 import type { ImagineJobPayload } from '../queues';
+import { isOnlySet } from '../queues';
 import { redactSecrets } from '../redact';
 import { deleteObject, putObject } from '../storage';
 import { getEnv } from '../env';
@@ -321,6 +322,35 @@ interface IllustrationPointRow {
   charOffset: number;
   momentDescription: string;
   presentCharacterIds: string[];
+}
+
+/**
+ * Builds the only-SET storyboard work plan: maps each requested `subjectId` to
+ * its illustration point and the next version to render (max+1 via
+ * `maxVersionFor`). subjectIds order is preserved, duplicates collapse to one
+ * item, and an unknown id throws (a stale regenerate request must fail loudly
+ * rather than silently drop a scene). Pure (no IO), unit-tested.
+ */
+export function planOnlyStoryboardSet<T extends { id: string }>(
+  pointRows: T[],
+  subjectIds: string[],
+  maxVersionFor: (subjectId: string) => number,
+): Array<{ point: T; version: number }> {
+  const byId = new Map(pointRows.map((p) => [p.id, p]));
+  const seen = new Set<string>();
+  const plan: Array<{ point: T; version: number }> = [];
+  for (const id of subjectIds) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const point = byId.get(id);
+    if (!point) {
+      throw new Error(
+        `imagine: illustration point ${id} not found (stale regenerate request?)`,
+      );
+    }
+    plan.push({ point, version: maxVersionFor(id) + 1 });
+  }
+  return plan;
 }
 
 /** Planned illustration points for the book, ordered for stable generation. */
@@ -1108,7 +1138,24 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
   };
 
   let plan: WorkItem[];
-  if (only) {
+  if (only && isOnlySet(only)) {
+    // Regeneration of a SET of storyboard points (e.g. every scene affected by a
+    // character merge). Each point gets its own next version (max+1); never
+    // skipped. The pure planner validates ids + computes versions; we then build
+    // the storyboard work items in that order.
+    const set = planOnlyStoryboardSet(pointRows, only.subjectIds, (id) =>
+      existing.maxVersion.get(subjectKey('scene_storyboard', id)) ?? 0,
+    );
+    const items: WorkItem[] = [];
+    let moment = 0;
+    for (const { point, version } of set) {
+      moment++;
+      const item = await storyboardItem(point, `Regenerating illustration ${moment}/${set.length}`);
+      item.version = version;
+      items.push(item);
+    }
+    plan = items;
+  } else if (only) {
     // Regeneration: exactly this subject, never skipped, next (or requested)
     // version.
     let item: WorkItem;
@@ -1176,7 +1223,9 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
   const total = plan.length;
   const genStart = only ? 0 : PLANNING_PERCENT_END;
   const genSpan = 100 - genStart;
-  const depth = only ? 1 : getEnv().WORKER_IMAGINE_INFLIGHT;
+  // A single-subject regen has one item (depth is moot); a set regen and a full
+  // run both use the bounded-concurrency window.
+  const depth = only && !isOnlySet(only) ? 1 : getEnv().WORKER_IMAGINE_INFLIGHT;
 
   let completed = 0;
   let attempted = 0;
@@ -1233,7 +1282,7 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
           stage: 'imagine',
           percent: genStart + (completed / Math.max(1, total)) * genSpan,
           currentStep: only
-            ? 'Regenerating illustration'
+            ? `Regenerating illustrations (${completed}/${total})`
             : `Illustrating images (${completed}/${total})`,
         }),
       );

@@ -26,13 +26,36 @@ export interface ProfilesJobPayload extends StageJobPayload {
   force?: boolean;
 }
 
-/** Imagine can optionally target a single subject (regeneration). */
+/** Regenerate exactly one subject (portrait or storyboard point). */
+export interface ImagineOnlyOne {
+  kind: 'character_portrait' | 'scene_storyboard';
+  subjectId: string;
+  version?: number;
+}
+
+/**
+ * Regenerate a SET of storyboard points in one job — used by the character
+ * merge to re-illustrate every affected scene at once. Each point gets its own
+ * next version (max+1). Only valid for storyboards.
+ */
+export interface ImagineOnlyStoryboardSet {
+  kind: 'scene_storyboard';
+  subjectIds: string[];
+}
+
+/**
+ * Imagine can optionally target specific subjects for regeneration (skipping
+ * Phase 0 planning): a single subject, or a set of storyboard points.
+ */
+export type ImagineOnly = ImagineOnlyOne | ImagineOnlyStoryboardSet;
+
 export interface ImagineJobPayload extends StageJobPayload {
-  only?: {
-    kind: 'character_portrait' | 'scene_storyboard';
-    subjectId: string;
-    version?: number;
-  };
+  only?: ImagineOnly;
+}
+
+/** True when an `only` payload targets a SET of storyboard points. */
+export function isOnlySet(only: ImagineOnly): only is ImagineOnlyStoryboardSet {
+  return 'subjectIds' in only;
 }
 
 export interface QueuePayloads {
