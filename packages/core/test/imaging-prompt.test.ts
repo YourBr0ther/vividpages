@@ -425,6 +425,149 @@ describe('buildScenePrompt', () => {
   });
 });
 
+describe('LoRA keyword weaving (imaging)', () => {
+  // Baselines: the exact current output with NO keyword. Off-path output must
+  // be byte-identical to these (the keyword feature must not perturb anything
+  // when absent), asserted with .toEqual the way the mature-content tests do.
+  const portraitBaseline = buildPortraitPrompt({ character: evie, style: painterly });
+  const sceneBaseline = buildScenePrompt({
+    scene: fullScene,
+    characters: [evie, tom],
+    style: painterly,
+  });
+
+  describe('buildPortraitPrompt', () => {
+    it('weaves a non-empty loraKeyword leading the subject phrase', () => {
+      const { prompt } = buildPortraitPrompt({
+        character: { ...evie, loraKeyword: 'kariiina' },
+        style: painterly,
+      });
+      // Keyword leads the subject: "{keyword}, {name}, {appearance}…".
+      expect(prompt).toContain(
+        'character portrait of kariiina, Evie, young woman, slender build, lavender hair, hazel eyes, wearing a practical work dress, ink-stained fingers',
+      );
+      looksLikeProse(prompt);
+    });
+
+    it('weaves the keyword for a name-only character as "{keyword}, {name}"', () => {
+      const { prompt } = buildPortraitPrompt({
+        character: { name: 'Quill', appearanceToken: null, profile: null, loraKeyword: 'qtoken' },
+        style: painterly,
+      });
+      expect(prompt).toContain('character portrait of qtoken, Quill');
+      looksLikeProse(prompt);
+    });
+
+    it('is byte-identical to the baseline when loraKeyword is absent', () => {
+      expect(buildPortraitPrompt({ character: evie, style: painterly })).toEqual(portraitBaseline);
+    });
+
+    it('is byte-identical to the baseline when loraKeyword is null', () => {
+      expect(
+        buildPortraitPrompt({ character: { ...evie, loraKeyword: null }, style: painterly }),
+      ).toEqual(portraitBaseline);
+    });
+
+    it('is byte-identical to the baseline when loraKeyword is blank/whitespace', () => {
+      expect(
+        buildPortraitPrompt({ character: { ...evie, loraKeyword: '   ' }, style: painterly }),
+      ).toEqual(portraitBaseline);
+    });
+
+    it('is deterministic with a keyword woven in', () => {
+      const a = buildPortraitPrompt({
+        character: { ...evie, loraKeyword: 'kariiina' },
+        style: { ...painterly },
+      });
+      const b = buildPortraitPrompt({
+        character: { ...evie, loraKeyword: 'kariiina' },
+        style: { ...painterly },
+      });
+      expect(a).toEqual(b);
+    });
+  });
+
+  describe('buildScenePrompt', () => {
+    it("weaves the keyword into THAT character's clause as '{keyword} {name} ({appearance})'", () => {
+      const { prompt } = buildScenePrompt({
+        scene: fullScene,
+        characters: [{ ...evie, loraKeyword: 'kariiina' }],
+        style: painterly,
+      });
+      expect(prompt).toContain(
+        'kariiina Evie (young woman, slender build, lavender hair, hazel eyes, wearing a practical work dress, ink-stained fingers)',
+      );
+      looksLikeProse(prompt);
+    });
+
+    it('binds each keyword to its own character and leaves un-keyworded ones unchanged', () => {
+      const { prompt } = buildScenePrompt({
+        scene: fullScene,
+        characters: [{ ...evie, loraKeyword: 'kariiina' }, tom],
+        style: painterly,
+      });
+      // Evie gets her keyword bound to her clause.
+      expect(prompt).toContain(
+        'kariiina Evie (young woman, slender build, lavender hair, hazel eyes, wearing a practical work dress, ink-stained fingers)',
+      );
+      // Tom (no keyword) is unchanged — no keyword leaks onto him.
+      expect(prompt).toContain(
+        'Tom (weathered man, broad-shouldered build, cropped grey hair, grey eyes, wearing a travel-worn cloak, grey beard)',
+      );
+      expect(prompt).not.toContain('kariiina Tom');
+    });
+
+    it('keeps "{keyword} {name}" attached when the description is dropped under length pressure', () => {
+      const wordy = (n: number, p: string) =>
+        Array.from({ length: n }, (_, i) => `${p}${i}`).join(' ');
+      const scene: SceneForPrompt = {
+        ...fullScene,
+        keyVisualMoment: wordy(150, 'moment'),
+        setting: wordy(40, 'place'),
+      };
+      const characters: CharacterForPrompt[] = [
+        { name: 'Evie', appearanceToken: `Evie: ${wordy(20, 'evie')}`, profile: null, loraKeyword: 'kariiina' },
+        { name: 'Tom', appearanceToken: `Tom: ${wordy(20, 'tom')}`, profile: null },
+      ];
+      const { prompt } = buildScenePrompt({ scene, characters, style: painterly });
+      // Description dropped, but the keyword stays attached to its name (not orphaned).
+      expect(prompt).not.toContain('evie0');
+      expect(prompt).toContain('kariiina Evie');
+      expect(prompt).toContain('Tom');
+      expect(prompt).not.toContain('kariiina Tom');
+    });
+
+    it('is byte-identical to the baseline when no character has a loraKeyword', () => {
+      expect(
+        buildScenePrompt({ scene: fullScene, characters: [evie, tom], style: painterly }),
+      ).toEqual(sceneBaseline);
+    });
+
+    it('is byte-identical to the baseline when loraKeyword is null/blank', () => {
+      expect(
+        buildScenePrompt({
+          scene: fullScene,
+          characters: [
+            { ...evie, loraKeyword: null },
+            { ...tom, loraKeyword: '   ' },
+          ],
+          style: painterly,
+        }),
+      ).toEqual(sceneBaseline);
+    });
+
+    it('is deterministic with keywords woven in', () => {
+      const make = () =>
+        buildScenePrompt({
+          scene: { ...fullScene },
+          characters: [{ ...evie, loraKeyword: 'kariiina' }, { ...tom }],
+          style: { ...painterly },
+        });
+      expect(make()).toEqual(make());
+    });
+  });
+});
+
 describe('mature-content fidelity (imaging)', () => {
   const portraitOff = buildPortraitPrompt({ character: evie, style: painterly });
   const sceneOff = buildScenePrompt({ scene: fullScene, characters: [evie], style: painterly });
