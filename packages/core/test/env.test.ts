@@ -54,6 +54,12 @@ describe('getEnv', () => {
     expect(env.WORKER_CONCURRENCY_ANALYZE).toBe(1);
     expect(env.WORKER_CONCURRENCY_PROFILES).toBe(1);
     expect(env.WORKER_CONCURRENCY_IMAGINE).toBe(1);
+    expect(env.WORKER_IMAGINE_INFLIGHT).toBe(2);
+  });
+
+  it('coerces WORKER_IMAGINE_INFLIGHT override to a positive integer', () => {
+    Object.assign(process.env, validEnv(), { WORKER_IMAGINE_INFLIGHT: '4' });
+    expect(getEnv().WORKER_IMAGINE_INFLIGHT).toBe(4);
   });
 
   it('coerces worker concurrency overrides to integers', () => {

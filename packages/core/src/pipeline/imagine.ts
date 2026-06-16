@@ -35,6 +35,8 @@ import {
 import type { ImagineJobPayload } from '../queues';
 import { redactSecrets } from '../redact';
 import { deleteObject, putObject } from '../storage';
+import { getEnv } from '../env';
+import { runWithConcurrency, type Outcome } from './concurrency';
 import { resolveImageGen, resolveLlm } from './llm';
 import {
   completeRun,
@@ -778,6 +780,148 @@ async function planIllustrationPoints(args: {
   log(`planning complete: ${pointCount} point(s) across ${planned}/${total} chapter(s)`);
 }
 
+/** Shared context for a single Phase-1 work item (carried into the pool). */
+interface WorkItemContext {
+  db: Db;
+  imageGen: ImageGen;
+  bookId: string;
+  log: (m: string) => void;
+}
+
+/**
+ * Generates, post-processes, stores and records ONE work item. Behavior is
+ * identical to the old sequential body for a single item:
+ *
+ *  - Transient ComfyUI blips retry in-place (TRANSIENT_RETRY_ATTEMPTS with
+ *    TRANSIENT_BACKOFF_MS) before counting as a failure.
+ *  - Success: sharp webp + 384px thumb → MinIO ×2 → `images` insert → 'done'.
+ *  - A systemic image-provider error (retries exhausted on NETWORK/TIMEOUT)
+ *    records a 'failed' row and returns 'systemic' so the pool's shared
+ *    consecutive counter can decide whether the run is doomed.
+ *  - A non-systemic image-provider error (e.g. a bad prompt) records a 'failed'
+ *    row and returns 'failed' — one bad item never blocks the book.
+ *  - A truly-unexpected non-provider error (sharp/storage/db) records a best-
+ *    effort 'failed' row, then RETHROWS (the pool surfaces it via onError).
+ *
+ * Returns the item's Outcome; never used for ordering (completion order varies).
+ */
+async function processWorkItem(item: WorkItem, ctx: WorkItemContext): Promise<Outcome> {
+  const { db, imageGen, bookId, log } = ctx;
+  try {
+    // Retry transient ComfyUI blips (dropped connection / slow generation)
+    // on the same image before treating it as a failure.
+    let result;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        result = await imageGen.generate({
+          prompt: item.prompt,
+          negative: item.negative,
+          width: item.width,
+          height: item.height,
+          // Empty → adapter returns a byte-identical no-LoRA graph.
+          loras: item.loras,
+        });
+        break;
+      } catch (genErr) {
+        if (!isSystemicImageError(genErr) || attempt >= TRANSIENT_RETRY_ATTEMPTS) throw genErr;
+        const backoff = TRANSIENT_BACKOFF_MS[attempt - 1] ?? 30_000;
+        const code = isImageProviderError(genErr) ? genErr.code : undefined;
+        log(
+          `${item.kind} ${item.subjectId} transient error ` +
+            `(${code}), retry ${attempt}/${TRANSIENT_RETRY_ATTEMPTS} in ${backoff}ms`,
+        );
+        await sleep(backoff);
+      }
+    }
+
+    const webp = await sharp(result.png).webp({ quality: WEBP_QUALITY }).toBuffer();
+    const thumb = await sharp(result.png)
+      .resize({ width: THUMB_WIDTH })
+      .webp({ quality: WEBP_QUALITY })
+      .toBuffer();
+
+    const base = `images/${bookId}/${item.kind}/${item.subjectId}/v${item.version}`;
+    const objectKey = `${base}.webp`;
+    const thumbObjectKey = `${base}.thumb.webp`;
+    await putObject('images', objectKey, webp, 'image/webp');
+    await putObject('images', thumbObjectKey, thumb, 'image/webp');
+
+    await db.insert(images).values({
+      bookId,
+      kind: item.kind,
+      subjectId: item.subjectId,
+      prompt: item.prompt,
+      negativePrompt: item.negative,
+      provider: imageGen.provider,
+      model: imageGen.model,
+      seed: BigInt(result.seed),
+      params: {
+        steps: result.params.steps,
+        cfg: result.params.cfg,
+        width: result.width,
+        height: result.height,
+        workflow: WORKFLOW,
+        durationMs: result.durationMs,
+        // Provenance (issue #2): the LoRAs actually applied. Omitted when none
+        // so no-LoRA rows are unchanged.
+        ...(item.loras.length > 0
+          ? { loras: item.loras.map((l) => ({ name: l.name, strength: l.strengthModel })) }
+          : {}),
+      },
+      objectKey,
+      thumbObjectKey,
+      width: result.width,
+      height: result.height,
+      status: 'done',
+      version: item.version,
+    });
+    log(
+      `${item.kind} ${item.subjectId} v${item.version} done ` +
+        `(seed ${result.seed}, ${result.durationMs}ms)`,
+    );
+    return 'done';
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // Record the failure (best effort) so the UI can show it, then decide
+    // whether the stage can keep going.
+    try {
+      await db.insert(images).values({
+        bookId,
+        kind: item.kind,
+        subjectId: item.subjectId,
+        prompt: item.prompt,
+        negativePrompt: item.negative,
+        provider: imageGen.provider,
+        model: imageGen.model,
+        params: { width: item.width, height: item.height, workflow: WORKFLOW },
+        status: 'failed',
+        error: redactSecrets(message),
+        version: item.version,
+      });
+    } catch (recordErr) {
+      console.error(`[imagine ${bookId}] failed to record image failure:`, recordErr);
+    }
+
+    // A systemic error here means the per-image retries above were already
+    // exhausted. One image's worth of blips must not nuke a 100+ image run, so
+    // the pool only aborts once several items return 'systemic' back-to-back
+    // (server truly gone or saturated); BullMQ then retries the stage, which
+    // resumes (done images are skipped).
+    if (isSystemicImageError(err)) {
+      log(`${item.kind} ${item.subjectId} v${item.version} systemic failure: ${message}`);
+      return 'systemic';
+    }
+    // Unexpected (sharp/storage/db): not a per-image generation problem — let
+    // the pool surface it (onError rethrows) so the stage fails loudly.
+    if (!isImageProviderError(err)) throw err;
+
+    // A non-systemic provider error (e.g. a bad prompt) must never block the
+    // whole book; record it and move on.
+    log(`${item.kind} ${item.subjectId} v${item.version} failed: ${message}`);
+    return 'failed';
+  }
+}
+
 /**
  * Imagine stage. Two phases:
  *
@@ -788,9 +932,13 @@ async function planIllustrationPoints(args: {
  * once; a BullMQ retry of the same runId skips Phase 0 and resumes Phase 1.
  *
  * Phase 1 — generate: one image per significant character (portrait) and per
- * planned illustration point (storyboard frame), generated sequentially (one
- * GPU), encoded to webp (full + 384px thumb), stored in MinIO, and recorded in
- * the images table with full provenance.
+ * planned illustration point (storyboard frame), encoded to webp (full + 384px
+ * thumb), stored in MinIO, and recorded in the images table with full
+ * provenance. Items run through a bounded-concurrency pool (issue #4,
+ * WORKER_IMAGINE_INFLIGHT, default 2) so the GPU isn't idle between renders —
+ * the GPU still serializes rendering; the window just removes our own
+ * post-processing idle gaps. The SET of images produced is identical to the
+ * old sequential loop; only completion order may vary.
  *
  * Resume-safe: subjects with a 'done' image of the same kind are skipped (after
  * a rebuild the points are fresh, so nothing is skipped). `only` targets a
@@ -1008,158 +1156,107 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
   );
 
   // -------------------------------------------------------------------------
-  // Generate sequentially (one GPU; concurrency is enforced at the worker).
-  // Phase 1 owns the PLANNING_PERCENT_END..100 slice of the progress bar.
+  // Generate through a bounded-concurrency pool (issue #4). The GPU still
+  // serializes rendering — a small in-flight window just keeps the next prompt
+  // queued in ComfyUI so the GPU isn't idle while a finished sibling
+  // post-processes (sharp + uploads + DB write) on our side. Phase 1 owns the
+  // PLANNING_PERCENT_END..100 slice of the progress bar.
+  //
+  // The hardening that was inline in the old sequential loop is preserved, now
+  // driven off SHARED counters updated as tasks settle (completion order
+  // varies; counts are order-independent):
+  //  - consecutiveSystemic: ++ on 'systemic', reset to 0 on 'done'; at
+  //    CONSECUTIVE_SYSTEMIC_LIMIT the run is doomed → set `aborted`.
+  //  - early-failure: if attempted ≤ EARLY_FAILURE_WINDOW and every attempted
+  //    item failed, the run is doomed → set `aborted`.
+  // `aborted` stops launching NEW items; in-flight tasks drain; then we throw
+  // the same systemic Error as before (BullMQ retries → run-stamping resumes,
+  // skipping done images).
   // -------------------------------------------------------------------------
+  const total = plan.length;
   const genStart = only ? 0 : PLANNING_PERCENT_END;
   const genSpan = 100 - genStart;
+  const depth = only ? 1 : getEnv().WORKER_IMAGINE_INFLIGHT;
+
   let completed = 0;
   let attempted = 0;
   let failed = 0;
   let consecutiveSystemic = 0;
+  let aborted = false;
+  /** The systemic Error to throw after the pool drains (set when aborting). */
+  let abortError: Error | undefined;
+  /** A truly-unexpected non-provider error from a task (rethrown after drain). */
+  let unexpectedError: unknown;
 
-  for (const item of plan) {
-    await reportProgress(runId, {
-      stage: 'imagine',
-      percent: genStart + (completed / Math.max(1, plan.length)) * genSpan,
-      currentStep: item.step,
-    });
+  const ctx: WorkItemContext = { db, imageGen, bookId, log };
+  /** In-flight progress reports; drained before the final 100% so a late one
+   * can't land after it. */
+  const progressReports: Array<Promise<void>> = [];
 
-    attempted++;
-    try {
-      // Retry transient ComfyUI blips (dropped connection / slow generation)
-      // on the same image before treating it as a failure.
-      let result;
-      for (let attempt = 1; ; attempt++) {
-        try {
-          result = await imageGen.generate({
-            prompt: item.prompt,
-            negative: item.negative,
-            width: item.width,
-            height: item.height,
-            // Empty → adapter returns a byte-identical no-LoRA graph.
-            loras: item.loras,
-          });
-          break;
-        } catch (genErr) {
-          if (!isSystemicImageError(genErr) || attempt >= TRANSIENT_RETRY_ATTEMPTS) throw genErr;
-          const backoff = TRANSIENT_BACKOFF_MS[attempt - 1] ?? 30_000;
-          const code = isImageProviderError(genErr) ? genErr.code : undefined;
-          log(
-            `${item.kind} ${item.subjectId} transient error ` +
-              `(${code}), retry ${attempt}/${TRANSIENT_RETRY_ATTEMPTS} in ${backoff}ms`,
-          );
-          await sleep(backoff);
-        }
-      }
-
-      const webp = await sharp(result.png).webp({ quality: WEBP_QUALITY }).toBuffer();
-      const thumb = await sharp(result.png)
-        .resize({ width: THUMB_WIDTH })
-        .webp({ quality: WEBP_QUALITY })
-        .toBuffer();
-
-      const base = `images/${bookId}/${item.kind}/${item.subjectId}/v${item.version}`;
-      const objectKey = `${base}.webp`;
-      const thumbObjectKey = `${base}.thumb.webp`;
-      await putObject('images', objectKey, webp, 'image/webp');
-      await putObject('images', thumbObjectKey, thumb, 'image/webp');
-
-      await db.insert(images).values({
-        bookId,
-        kind: item.kind,
-        subjectId: item.subjectId,
-        prompt: item.prompt,
-        negativePrompt: item.negative,
-        provider: imageGen.provider,
-        model: imageGen.model,
-        seed: BigInt(result.seed),
-        params: {
-          steps: result.params.steps,
-          cfg: result.params.cfg,
-          width: result.width,
-          height: result.height,
-          workflow: WORKFLOW,
-          durationMs: result.durationMs,
-          // Provenance (issue #2): the LoRAs actually applied. Omitted when none
-          // so no-LoRA rows are unchanged.
-          ...(item.loras.length > 0
-            ? { loras: item.loras.map((l) => ({ name: l.name, strength: l.strengthModel })) }
-            : {}),
-        },
-        objectKey,
-        thumbObjectKey,
-        width: result.width,
-        height: result.height,
-        status: 'done',
-        version: item.version,
-      });
-      consecutiveSystemic = 0;
-      log(
-        `${item.kind} ${item.subjectId} v${item.version} done ` +
-          `(seed ${result.seed}, ${result.durationMs}ms)`,
-      );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      // Record the failure (best effort) so the UI can show it, then decide
-      // whether the stage can keep going.
-      try {
-        await db.insert(images).values({
-          bookId,
-          kind: item.kind,
-          subjectId: item.subjectId,
-          prompt: item.prompt,
-          negativePrompt: item.negative,
-          provider: imageGen.provider,
-          model: imageGen.model,
-          params: { width: item.width, height: item.height, workflow: WORKFLOW },
-          status: 'failed',
-          error: redactSecrets(message),
-          version: item.version,
-        });
-      } catch (recordErr) {
-        console.error(`[imagine ${bookId}] failed to record image failure:`, recordErr);
-      }
-
-      // A systemic error here means the per-image retries above were already
-      // exhausted. One image's worth of blips must not nuke a 100+ image run,
-      // so only abort once several images fail back-to-back (server truly gone
-      // or saturated); BullMQ then retries the stage, which resumes (done
-      // images are skipped).
-      if (isSystemicImageError(err)) {
-        consecutiveSystemic++;
-        failed++;
-        log(
-          `${item.kind} ${item.subjectId} v${item.version} systemic failure ` +
-            `${consecutiveSystemic}/${CONSECUTIVE_SYSTEMIC_LIMIT}: ${message}`,
-        );
-        if (consecutiveSystemic >= CONSECUTIVE_SYSTEMIC_LIMIT) {
-          throw new Error(
-            `imagine: ${consecutiveSystemic} consecutive image-provider failures — ` +
-              `aborting as systemic (last: ${redactSecrets(message)})`,
-          );
-        }
+  await runWithConcurrency<WorkItem>(plan, depth, (item) => processWorkItem(item, ctx), {
+    onOutcome: (outcome) => {
+      attempted++;
+      if (outcome === 'done') {
         completed++;
-        continue;
+        consecutiveSystemic = 0;
+      } else if (outcome === 'systemic') {
+        // A 'systemic' item already recorded its 'failed' row and exhausted its
+        // own transient retries; it counts toward completion (we move past it)
+        // but feeds the consecutive-systemic doom counter.
+        completed++;
+        failed++;
+        consecutiveSystemic++;
+        log(`systemic failure ${consecutiveSystemic}/${CONSECUTIVE_SYSTEMIC_LIMIT}`);
+        if (consecutiveSystemic >= CONSECUTIVE_SYSTEMIC_LIMIT && !aborted) {
+          aborted = true;
+          abortError = new Error(
+            `imagine: ${consecutiveSystemic} consecutive image-provider failures — ` +
+              `aborting as systemic`,
+          );
+        }
+      } else {
+        // 'failed' — a non-systemic provider error (bad prompt). It recorded a
+        // 'failed' row; we move past it (completed++) so one bad item never
+        // blocks the book.
+        completed++;
+        failed++;
+        if (failed === attempted && attempted >= EARLY_FAILURE_WINDOW && !aborted) {
+          aborted = true;
+          abortError = new Error(
+            `imagine: first ${attempted} generations all failed — aborting as systemic`,
+          );
+        }
       }
-      // Unexpected (sharp/storage/db): not a per-image generation problem.
-      if (!isImageProviderError(err)) throw err;
+      // Order-independent progress: how many of the plan have settled.
+      progressReports.push(
+        reportProgress(runId, {
+          stage: 'imagine',
+          percent: genStart + (completed / Math.max(1, total)) * genSpan,
+          currentStep: only
+            ? 'Regenerating illustration'
+            : `Illustrating images (${completed}/${total})`,
+        }),
+      );
+    },
+    shouldAbort: () => aborted,
+    onError: (err) => {
+      // processWorkItem only rethrows truly-unexpected non-provider errors
+      // (sharp/storage/db). Capture the first and abort the pool; rethrow after
+      // it drains so the stage fails loudly (no resume-skip benefit here).
+      if (unexpectedError === undefined) unexpectedError = err;
+      aborted = true;
+    },
+  });
 
-      failed++;
-      log(`${item.kind} ${item.subjectId} v${item.version} failed: ${message}`);
-      if (failed === attempted && attempted >= EARLY_FAILURE_WINDOW) {
-        throw new Error(
-          `imagine: first ${attempted} generations all failed — aborting as systemic ` +
-            `(last error: ${redactSecrets(message)})`,
-        );
-      }
-      // Otherwise: one bad prompt must never block the whole book.
-    }
-    completed++;
-  }
+  // Settle any pending progress writes so a late one can't overwrite the final
+  // 100% below (best-effort: a failed progress write must not fail the stage).
+  await Promise.allSettled(progressReports);
+
+  if (unexpectedError !== undefined) throw unexpectedError;
+  if (abortError) throw abortError;
 
   log(
-    `complete: ${completed - failed}/${plan.length} images generated` +
+    `complete: ${completed - failed}/${total} images generated` +
       (failed > 0 ? `, ${failed} failed` : ''),
   );
 

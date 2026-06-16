@@ -27,6 +27,13 @@ const envSchema = z.object({
   WORKER_CONCURRENCY_ANALYZE: z.coerce.number().int().positive().default(1),
   WORKER_CONCURRENCY_PROFILES: z.coerce.number().int().positive().default(1),
   WORKER_CONCURRENCY_IMAGINE: z.coerce.number().int().positive().default(1),
+  /**
+   * In-flight depth for the imagine stage's Phase-1 generation (issue #4).
+   * A small sliding window keeps the next prompt queued in ComfyUI so the GPU
+   * rolls straight into it while a finished sibling post-processes on our side.
+   * The GPU still serializes rendering — this only removes our own idle gaps.
+   */
+  WORKER_IMAGINE_INFLIGHT: z.coerce.number().int().positive().default(2),
 });
 
 export type Env = z.infer<typeof envSchema>;
