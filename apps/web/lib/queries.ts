@@ -297,6 +297,10 @@ export interface CastMember {
   portraitImageId: string | null;
   /** Thumb URL for the latest portrait (derived from portraitImageId). */
   imageUrl: string | null;
+  /** Per-character LoRA config (issue #2). loraName null = no LoRA. */
+  loraName: string | null;
+  loraKeyword: string | null;
+  loraStrength: number | null;
 }
 
 const CAST_ROLES = new Set<string>(CAST_ROLE_ORDER);
@@ -340,6 +344,9 @@ export async function listCast(bookId: string): Promise<CastMember[]> {
         profile: characters.profile,
         appearanceToken: characters.appearanceToken,
         sceneCount: characters.sceneCount,
+        loraName: characters.loraName,
+        loraKeyword: characters.loraKeyword,
+        loraStrength: characters.loraStrength,
       })
       .from(characters)
       .where(eq(characters.bookId, bookId))
@@ -359,6 +366,9 @@ export async function listCast(bookId: string): Promise<CastMember[]> {
       sceneCount: row.sceneCount,
       portraitImageId,
       imageUrl: portraitImageId ? `/api/images/${portraitImageId}?thumb=1` : null,
+      loraName: row.loraName,
+      loraKeyword: row.loraKeyword,
+      loraStrength: row.loraStrength,
     };
   });
 }
