@@ -50,6 +50,13 @@
       "when": 1781617186368,
       "tag": "0006_funny_purple_man",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1781619412455,
+      "tag": "0007_panoramic_grim_reaper",
+      "breakpoints": true
     }
   ]
 }
