@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildIllustrationPlanPrompt,
   MAX_PLAN_CHAPTER_CHARS,
+  PLAN_FIDELITY_INSTRUCTION,
 } from '../src/illustration/plan-prompt';
 
 const base = {
@@ -94,5 +95,47 @@ describe('buildIllustrationPlanPrompt', () => {
   it('handles an empty roster', () => {
     const { prompt } = buildIllustrationPlanPrompt({ ...base, roster: [] });
     expect(prompt).toMatch(/no characters|none/i);
+  });
+
+  describe('mature-content fidelity', () => {
+    const offPath = buildIllustrationPlanPrompt(base);
+
+    it('produces byte-identical output to current when mature is absent', () => {
+      expect(buildIllustrationPlanPrompt(base)).toEqual(offPath);
+    });
+
+    it('produces byte-identical output to the absent case when mature is false', () => {
+      expect(buildIllustrationPlanPrompt({ ...base, mature: false })).toEqual(offPath);
+    });
+
+    it('does not include the fidelity instruction when mature is off', () => {
+      const off = buildIllustrationPlanPrompt({ ...base, mature: false });
+      expect(off.system).not.toContain(PLAN_FIDELITY_INSTRUCTION);
+      expect(off.prompt).not.toContain(PLAN_FIDELITY_INSTRUCTION);
+    });
+
+    it('includes the fidelity instruction when mature is on', () => {
+      const on = buildIllustrationPlanPrompt({ ...base, mature: true });
+      const combined = `${on.system}\n${on.prompt}`;
+      expect(combined).toContain(PLAN_FIDELITY_INSTRUCTION);
+    });
+
+    it('the fidelity instruction frames mature beats as legitimate visual moments', () => {
+      expect(PLAN_FIDELITY_INSTRUCTION).toMatch(/legitimate/i);
+      expect(PLAN_FIDELITY_INSTRUCTION).toMatch(/skip|soften/i);
+    });
+
+    it('is deterministic on the mature path', () => {
+      const a = buildIllustrationPlanPrompt({ ...base, mature: true });
+      const b = buildIllustrationPlanPrompt({ ...base, mature: true });
+      expect(a).toEqual(b);
+    });
+
+    it('still keeps the existing planning instructions on the mature path', () => {
+      const { prompt } = buildIllustrationPlanPrompt({ ...base, mature: true });
+      expect(prompt).toMatch(/verbatim/i);
+      expect(prompt).toMatch(/spread/i);
+      expect(prompt).toContain('Assistant to the Villain');
+    });
   });
 });

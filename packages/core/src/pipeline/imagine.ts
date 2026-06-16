@@ -567,7 +567,13 @@ async function planIllustrationPoints(args: {
   db: Db;
   bookId: string;
   runId: string;
-  book: { title: string; userId: string; llmProvider: string | null; llmModel: string | null };
+  book: {
+    title: string;
+    userId: string;
+    llmProvider: string | null;
+    llmModel: string | null;
+    matureContent: boolean;
+  };
   log: (m: string) => void;
 }): Promise<void> {
   const { db, bookId, runId, book, log } = args;
@@ -624,6 +630,7 @@ async function planIllustrationPoints(args: {
         maxMoments,
         llm,
         bookTitle: book.title,
+        mature: book.matureContent,
       });
       await incrementRunTokens(runId, result.tokensIn, result.tokensOut);
 
@@ -798,7 +805,11 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
   const pointRows = await loadIllustrationPoints(db, bookId);
 
   const portraitItem = (c: PortraitCharacter, step: string): WorkItem => {
-    const { prompt, negative } = buildPortraitPrompt({ character: c, style: styleFragment });
+    const { prompt, negative } = buildPortraitPrompt({
+      character: c,
+      style: styleFragment,
+      mature: book.matureContent,
+    });
     return {
       kind: 'character_portrait',
       subjectId: c.id,
@@ -829,6 +840,7 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
       },
       characters: cast,
       style: styleFragment,
+      mature: book.matureContent,
     });
     return {
       kind: 'scene_storyboard',

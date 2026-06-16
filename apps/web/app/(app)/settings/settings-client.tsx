@@ -26,7 +26,11 @@ export interface SettingsValues {
   imageModel: string | null;
   ollamaUrl: string | null;
   comfyuiUrl: string | null;
+  matureContentDefault: boolean;
 }
+
+/** Cloud providers that decline mature content under their usage policies. */
+const CLOUD_PROVIDERS = new Set(['anthropic', 'openai']);
 
 // ---------------------------------------------------------------------------
 // Provider/model catalogues (used to populate the dropdowns).
@@ -80,6 +84,49 @@ function Field({
       <span className={labelClass}>{label}</span>
       {children}
     </div>
+  );
+}
+
+/**
+ * Accessible switch: a real checkbox (label-associated, keyboard-operable)
+ * styled as a candlelit toggle track.
+ */
+function Toggle({
+  id,
+  checked,
+  onChange,
+  label,
+  describedBy,
+}: {
+  id: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+  describedBy?: string;
+}) {
+  return (
+    <label htmlFor={id} className="flex cursor-pointer items-center gap-3">
+      <span className="relative inline-flex h-6 w-11 shrink-0 items-center">
+        <input
+          id={id}
+          type="checkbox"
+          role="switch"
+          checked={checked}
+          aria-describedby={describedBy}
+          onChange={(e) => onChange(e.target.checked)}
+          className="peer absolute inset-0 z-10 m-0 cursor-pointer appearance-none rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ember-400/60 focus-visible:ring-offset-2 focus-visible:ring-offset-stone-950"
+        />
+        <span
+          aria-hidden
+          className="h-6 w-11 rounded-full border border-stone-700/70 bg-stone-950/70 transition peer-checked:border-ember-400/60 peer-checked:bg-ember-500/80"
+        />
+        <span
+          aria-hidden
+          className="absolute left-0.5 h-5 w-5 rounded-full bg-stone-400 shadow transition peer-checked:translate-x-5 peer-checked:bg-stone-950"
+        />
+      </span>
+      <span className="font-display text-sm tracking-tight text-parchment">{label}</span>
+    </label>
   );
 }
 
@@ -464,6 +511,39 @@ export function SettingsClient({
               className={inputClass}
             />
           </Field>
+        </div>
+      </section>
+
+      {/* Mature content -------------------------------------------------- */}
+      <section aria-labelledby="mature-heading" className={`${sectionClass} mt-8`}>
+        <h2 id="mature-heading" className="font-display text-xl tracking-tight text-parchment">
+          Mature content
+        </h2>
+        <div className="mt-5">
+          <Toggle
+            id="mature-content-default"
+            checked={settings.matureContentDefault}
+            onChange={(next) =>
+              setSettings((s) => ({ ...s, matureContentDefault: next }))
+            }
+            label="Mature content — faithful depiction"
+            describedBy="mature-content-help"
+          />
+          <p id="mature-content-help" className="mt-3 max-w-2xl text-sm leading-relaxed text-stone-400">
+            When on, new books are analyzed and illustrated faithfully to their source, including
+            mature content, instead of being sanitized. Off by default.
+          </p>
+          {settings.matureContentDefault &&
+          (CLOUD_PROVIDERS.has(settings.llmProvider) ||
+            CLOUD_PROVIDERS.has(settings.imageProvider)) ? (
+            <p
+              role="note"
+              className="mt-3 max-w-2xl rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-sm leading-relaxed text-amber-200/90"
+            >
+              Cloud providers may refuse mature content — use a local model (Ollama / ComfyUI) for
+              faithful results.
+            </p>
+          ) : null}
         </div>
       </section>
 

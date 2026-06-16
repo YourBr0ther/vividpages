@@ -118,6 +118,12 @@ export const userSettings = pgTable('user_settings', {
   /** Null = use environment defaults. */
   ollamaUrl: text(),
   comfyuiUrl: text(),
+  /**
+   * Pre-fills `books.matureContent` for new uploads: when on, the pipeline
+   * instructs the (user-controlled, local) model to faithfully depict mature
+   * source content rather than euphemizing it. Default off.
+   */
+  matureContentDefault: boolean().notNull().default(false),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -178,6 +184,12 @@ export const books = pgTable(
     llmProvider: text(),
     llmModel: text(),
     imageProvider: text(),
+    /**
+     * Effective per-book flag, seeded from `user_settings.matureContentDefault`
+     * at upload and overridable in book settings. When on, the pipeline's three
+     * LLM stages instruct the model to depict mature source content faithfully.
+     */
+    matureContent: boolean().notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

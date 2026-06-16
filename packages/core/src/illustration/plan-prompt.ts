@@ -16,7 +16,21 @@ export interface IllustrationPlanPromptArgs {
   /** Upper bound on the number of moments to return (a cap, not a floor). */
   maxMoments: number;
   bookTitle: string;
+  /**
+   * When true (opt-in, per-book), tell the planner that mature beats are
+   * legitimate visual moments not to be skipped. Default false — off-path
+   * output is byte-identical to omitting this flag.
+   */
+  mature?: boolean;
 }
+
+/**
+ * Fidelity instruction added to the planning prompt when `mature` is on.
+ * Professional, non-graphic.
+ */
+export const PLAN_FIDELITY_INSTRUCTION =
+  'Mature beats (intimacy, sexuality, violence) are legitimate and often the ' +
+  'most important visual moments — do not skip or soften them.';
 
 /**
  * Chapter text beyond this is middle-truncated with an omitted marker. A single
@@ -76,6 +90,7 @@ export function buildIllustrationPlanPrompt(args: IllustrationPlanPromptArgs): {
     'Instructions:',
     `- Pick at most ${args.maxMoments} moments, SPREAD across the chapter — choose moments from different points in the text, not clustered together.`,
     '- Prefer concrete action, setting, and character beats over pure dialogue.',
+    ...(args.mature ? [`- ${PLAN_FIDELITY_INSTRUCTION}`] : []),
     '- Anchor each moment to a VERBATIM sentence copied exactly from the chapter text (≤ ~120 characters) so its location can be found. Copy it character-for-character.',
     '- description: ONE filmable sentence describing the visual moment.',
     '- characters: roster names of the characters present in the moment.',

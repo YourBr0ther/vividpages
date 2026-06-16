@@ -305,6 +305,7 @@ export async function runAnalyze({ bookId, runId }: StageJobPayload): Promise<vo
       roster,
       prevSummary,
       bookTitle: book.title,
+      mature: book.matureContent,
     });
 
     attempted++;
