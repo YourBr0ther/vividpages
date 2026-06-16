@@ -2,6 +2,7 @@ import type { CastMember, CastRole } from '@/lib/queries';
 
 import { bindingFor } from './book-cover-art';
 import { CharacterLoraConfig } from './character-lora-config';
+import { CharacterMergeAction } from './character-merge-action';
 import { PortraitLightbox } from './portrait-lightbox';
 
 /** Role badge tints: ember for leads, deep red for villains, quiet otherwise. */
@@ -65,8 +66,20 @@ function Portrait({ member }: { member: CastMember }) {
  * one-line visual identity, quiet trait chips, and the appearance token
  * behind a disclosure for transparency. Server-renderable (no hooks).
  */
-export function CharacterCard({ member }: { member: CastMember }) {
+export function CharacterCard({
+  member,
+  bookId,
+  cast,
+}: {
+  member: CastMember;
+  bookId: string;
+  /** The whole cast — used to offer the OTHER characters as merge primaries. */
+  cast: CastMember[];
+}) {
   const { profile } = member;
+  const mergeTargets = cast
+    .filter((c) => c.id !== member.id)
+    .map((c) => ({ id: c.id, name: c.name }));
   const chips = profile
     ? CHIP_TRAITS.flatMap(([key, label]) => {
         const value = profile[key];
@@ -147,6 +160,14 @@ export function CharacterCard({ member }: { member: CastMember }) {
             loraStrength: member.loraStrength,
           }}
         />
+
+        {mergeTargets.length > 0 ? (
+          <CharacterMergeAction
+            bookId={bookId}
+            character={{ id: member.id, name: member.name, sceneCount: member.sceneCount }}
+            targets={mergeTargets}
+          />
+        ) : null}
       </div>
     </article>
   );

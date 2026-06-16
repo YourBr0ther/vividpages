@@ -43,11 +43,19 @@ function SectionHeading({ label, count, tint }: { label: string; count: number; 
   );
 }
 
-function CardGrid({ members }: { members: CastMember[] }) {
+function CardGrid({
+  members,
+  bookId,
+  cast,
+}: {
+  members: CastMember[];
+  bookId: string;
+  cast: CastMember[];
+}) {
   return (
     <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {members.map((member) => (
-        <CharacterCard key={member.id} member={member} />
+        <CharacterCard key={member.id} member={member} bookId={bookId} cast={cast} />
       ))}
     </div>
   );
@@ -129,7 +137,7 @@ export default async function CastPage({ params }: PageProps) {
                   count={members.length}
                   tint={tint}
                 />
-                <CardGrid members={members} />
+                <CardGrid members={members} bookId={book.id} cast={cast} />
               </section>,
             ];
           })}
@@ -138,7 +146,7 @@ export default async function CastPage({ params }: PageProps) {
             <section aria-label="Minor characters" className="space-y-6">
               <SectionHeading label="Minor" count={minor.length} tint="text-stone-500" />
               <MinorCastDisclosure count={minor.length}>
-                <CardGrid members={minor} />
+                <CardGrid members={minor} bookId={book.id} cast={cast} />
               </MinorCastDisclosure>
             </section>
           ) : null}
