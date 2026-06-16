@@ -1,8 +1,20 @@
 /**
  * Image prompt assembly: deterministic, LLM-free composition of portrait and
  * scene prompts from character profiles, scene metadata, and a style preset.
- * Z-Image Turbo follows concise natural prose better than tag soup, so the
- * builders emit short sentences rather than keyword lists. Pure (no IO).
+ *
+ * Tuned for Z-Image Turbo (a CFG≈1 distilled model). Two consequences shape
+ * everything here:
+ *
+ *  1. Negative prompts are inert at CFG≈1, so both builders return an EMPTY
+ *     negative. Technical constraints ("no text/watermark/logo") are folded
+ *     into a short trailing clause of the POSITIVE prompt instead.
+ *  2. The model follows long, precise natural-language *prose* far better than
+ *     comma-separated tag soup, and is very responsive to explicit lighting
+ *     language. So the builders emit camera-structured sentences on the
+ *     scaffold: [shot/composition] + [subject] + [clothing] + [environment]
+ *     + [lighting] + [mood] + [style/medium] + [technical constraints].
+ *
+ * Pure (no IO) and deterministic: identical input → byte-identical output.
  */
 
 import type { CharacterProfile } from '../analysis/profile-schema';
@@ -26,20 +38,27 @@ export interface SceneForPrompt {
   keyVisualMoment: string | null;
 }
 
-/** Negative terms appended to every prompt regardless of style. */
-export const NEGATIVE_BASE =
-  'deformed, extra fingers, extra limbs, lowres, blurry, jpeg artifacts, text, watermark';
-
-/** Most characters listed in one scene prompt. */
+/** Most characters described in one scene prompt. */
 export const MAX_SCENE_CHARACTERS = 3;
 
 /** Word cap for each character description inside a scene prompt. */
 export const MAX_SCENE_DESCRIPTION_WORDS = 25;
 
-/** Soft word cap for the whole scene prompt. */
-export const MAX_SCENE_PROMPT_WORDS = 180;
+/**
+ * Soft word cap for the whole scene prompt. The scaffold guidance is 80–250
+ * words ("long and precise"); we aim under this and shed detail (character
+ * descriptions first, then the setting — never the key moment) when over.
+ */
+export const MAX_SCENE_PROMPT_WORDS = 230;
 
-const SCENE_FALLBACK = 'A quiet narrative moment.';
+/** Action used when a scene has no key moment or summary. */
+const SCENE_FALLBACK = 'A quiet narrative moment';
+
+/**
+ * Trailing technical-constraint clause. On a CFG≈1 model these belong in the
+ * positive prompt (the negative is ignored), phrased as plain prose.
+ */
+const TECHNICAL_CLAUSE = 'No text, watermarks, or logos.';
 
 const countWords = (s: string): number => s.split(/\s+/).filter(Boolean).length;
 
@@ -58,6 +77,35 @@ function capWords(text: string, max: number): string {
   const words = text.split(/\s+/).filter(Boolean);
   if (words.length <= max) return text;
   return normalizeFragment(words.slice(0, max).join(' '));
+}
+
+/**
+ * Maps our `timeOfDay` enum to an explicit lighting phrase. Z-Image Turbo is
+ * very responsive to lighting language, so we always state it. Case- and
+ * whitespace-insensitive; null/unknown values fall back to neutral lighting.
+ */
+export function lightingFor(timeOfDay: string | null): string {
+  const key = (timeOfDay ?? '').trim().toLowerCase();
+  switch (key) {
+    case 'dawn':
+      return 'pale, cool dawn light';
+    case 'morning':
+      return 'soft morning light';
+    case 'midday':
+    case 'noon':
+      return 'bright midday sunlight';
+    case 'afternoon':
+      return 'bright afternoon daylight';
+    case 'evening':
+      return 'warm golden-hour light';
+    case 'dusk':
+    case 'twilight':
+      return 'fading violet dusk light';
+    case 'night':
+      return 'dim, low-key moonlit night lighting';
+    default:
+      return 'natural, even lighting';
+  }
 }
 
 /**
@@ -97,7 +145,11 @@ function tokenBody(token: string): string {
  * traits ('young woman, slender build, lavender hair, hazel eyes, wearing a
  * practical work dress, ink-stained fingers'). Prefers profile fields; falls
  * back to the appearance token without its name prefix, then to the name
- * alone. Deterministic.
+ * alone.
+ *
+ * The trait substance is the cross-image consistency mechanism (and the LoRA
+ * anchor), so it is reproduced VERBATIM — woven into a sentence by the
+ * builders, but never paraphrased or summarized away. Deterministic.
  */
 export function renderCharacterDescription(c: CharacterForPrompt): string {
   const name = normalizeFragment(c.name);
@@ -128,30 +180,15 @@ export function renderCharacterDescription(c: CharacterForPrompt): string {
   return name;
 }
 
-/** Splits a comma-separated negative fragment into normalized terms. */
-function negativeTerms(fragment: string): string[] {
-  return fragment
-    .split(',')
-    .map((term) => normalizeFragment(term).toLowerCase())
-    .filter(Boolean);
-}
-
-/** Style negative first, shared base appended, duplicates removed. */
-function buildNegative(style: StyleFragment): string {
-  const seen = new Set<string>();
-  const terms: string[] = [];
-  for (const term of [...negativeTerms(style.negativeFragment), ...negativeTerms(NEGATIVE_BASE)]) {
-    if (seen.has(term)) continue;
-    seen.add(term);
-    terms.push(term);
-  }
-  return terms.join(', ');
-}
-
 /**
- * Character portrait prompt: style, identity, then neutral framing. The
- * description is embedded verbatim so every portrait of a character reuses
- * the same identity fragment.
+ * Character portrait prompt as camera-structured prose. The appearance
+ * description is embedded verbatim so every portrait of a character reuses the
+ * same identity fragment (the consistency anchor). Studio framing and lighting
+ * are fixed; the style preset supplies the medium/style. The negative is empty
+ * (inert on Z-Image Turbo). Deterministic.
+ *
+ * Scaffold: [shot] of [subject: name + appearance/clothing]. [environment].
+ * [lighting]. [style/medium]. [mood]. [technical constraints].
  */
 export function buildPortraitPrompt(args: {
   character: CharacterForPrompt;
@@ -159,38 +196,65 @@ export function buildPortraitPrompt(args: {
 }): { prompt: string; negative: string } {
   const name = normalizeFragment(args.character.name);
   const description = renderCharacterDescription(args.character);
-  const identity =
+  const subject =
     description === name
-      ? `Character portrait of ${name}`
-      : `Character portrait of ${name}: ${description}`;
+      ? `A three-quarter character portrait of ${name}`
+      : `A three-quarter character portrait of ${name}, ${description}`;
+
   const prompt = [
-    sentence(args.style.promptFragment),
-    sentence(identity),
-    'Three-quarter view, neutral background with soft ambient depth, focused character study.',
+    sentence(subject),
+    'Set against a neutral studio backdrop with soft ambient depth.',
+    'Lit with even, soft studio lighting.',
+    sentence(`Rendered as ${normalizeFragment(args.style.promptFragment)}`),
+    'A focused, dignified character study.',
+    TECHNICAL_CLAUSE,
   ].join(' ');
-  return { prompt, negative: buildNegative(args.style) };
+
+  return { prompt, negative: '' };
 }
 
 interface SceneParts {
-  style: string;
+  composition: string;
   moment: string;
-  setting: string | null;
-  light: string | null;
   characters: string | null;
+  setting: string | null;
+  lighting: string;
+  mood: string | null;
+  style: string;
+  technical: string;
 }
 
+/**
+ * Joins the scaffold in reading order:
+ * [composition] [action] [cast] [setting] [lighting] [mood] [style] [technical].
+ * Null slots are omitted. The technical clause always trails last.
+ */
 function joinSceneParts(parts: SceneParts): string {
-  return [parts.style, parts.moment, parts.setting, parts.light, parts.characters]
+  return [
+    parts.composition,
+    parts.moment,
+    parts.characters,
+    parts.setting,
+    parts.lighting,
+    parts.mood,
+    parts.style,
+    parts.technical,
+  ]
     .filter((p): p is string => p !== null)
     .join(' ');
 }
 
 /**
- * Scene illustration prompt. Leads with the key visual moment (falling back
- * to the summary, then a generic beat), then setting, light/mood, and up to
- * three characters in caller order with word-capped verbatim descriptions.
+ * Scene illustration prompt as camera-structured prose. Leads with a cinematic
+ * composition and the key visual moment as the action (falling back to the
+ * summary, then a generic beat), then the present cast (name + verbatim
+ * appearance, capped at MAX_SCENE_CHARACTERS), the setting, explicit lighting
+ * derived from `timeOfDay`, the mood, the style preset as medium, and the
+ * trailing technical clause.
+ *
  * Under length pressure it drops character descriptions first (keeping the
- * names), then the setting line — never the key moment. Deterministic.
+ * names), then the setting clause — never the key moment, lighting, or style.
+ * The negative is empty (inert on Z-Image Turbo). Deterministic.
  */
 export function buildScenePrompt(args: {
   scene: SceneForPrompt;
@@ -200,51 +264,52 @@ export function buildScenePrompt(args: {
   const { scene, style } = args;
 
   const moment = scene.keyVisualMoment?.trim() || scene.summary?.trim() || SCENE_FALLBACK;
-  const setting = scene.setting?.trim() ? sentence(`Setting: ${scene.setting}`) : null;
+  const setting = scene.setting?.trim()
+    ? sentence(`The setting is ${normalizeFragment(scene.setting)}`)
+    : null;
 
-  const timeOfDay = scene.timeOfDay?.trim();
-  const mood = scene.mood?.trim();
-  const light =
-    timeOfDay && mood
-      ? sentence(`${timeOfDay} light, ${mood} mood`)
-      : timeOfDay
-        ? sentence(`${timeOfDay} light`)
-        : mood
-          ? sentence(`${mood} mood`)
-          : null;
+  const lighting = sentence(`Lit with ${lightingFor(scene.timeOfDay)}`);
+
+  const mood = scene.mood?.trim()
+    ? sentence(`The mood is ${normalizeFragment(scene.mood)}`)
+    : null;
 
   const cast = args.characters.slice(0, MAX_SCENE_CHARACTERS).map((c) => ({
     name: normalizeFragment(c.name),
     description: capWords(renderCharacterDescription(c), MAX_SCENE_DESCRIPTION_WORDS),
   }));
 
-  const charactersFull =
-    cast.length > 0
-      ? sentence(
-          `Characters present: ${cast
-            .map((c) =>
-              c.description && c.description !== c.name ? `${c.name} (${c.description})` : c.name,
-            )
-            .join('; ')}`,
-        )
-      : null;
-  const charactersNamesOnly =
-    cast.length > 0 ? sentence(`Characters present: ${cast.map((c) => c.name).join('; ')}`) : null;
-
-  const base: SceneParts = {
-    style: sentence(style.promptFragment),
-    moment: sentence(moment),
-    setting,
-    light,
-    characters: charactersFull,
+  const castClause = (withDescriptions: boolean): string | null => {
+    if (cast.length === 0) return null;
+    const rendered = cast.map((c) =>
+      withDescriptions && c.description && c.description !== c.name
+        ? `${c.name} (${c.description})`
+        : c.name,
+    );
+    const list =
+      rendered.length === 1
+        ? rendered[0]
+        : `${rendered.slice(0, -1).join(', ')} and ${rendered[rendered.length - 1]}`;
+    return sentence(`Featuring ${list}`);
   };
 
-  // Drop order under length pressure: character descriptions, then the
-  // setting line. The key moment (and style/light) always survive.
+  const base: SceneParts = {
+    composition: 'A cinematic, illustrative wide shot.',
+    moment: sentence(moment),
+    characters: castClause(true),
+    setting,
+    lighting,
+    mood,
+    style: sentence(`Rendered as ${normalizeFragment(style.promptFragment)}`),
+    technical: TECHNICAL_CLAUSE,
+  };
+
+  // Drop order under length pressure: character descriptions (keep names),
+  // then the setting clause. The key moment, lighting, mood, and style survive.
   const variants: SceneParts[] = [
     base,
-    { ...base, characters: charactersNamesOnly },
-    { ...base, characters: charactersNamesOnly, setting: null },
+    { ...base, characters: castClause(false) },
+    { ...base, characters: castClause(false), setting: null },
   ];
 
   let prompt = joinSceneParts(variants[variants.length - 1]!);
@@ -256,5 +321,5 @@ export function buildScenePrompt(args: {
     }
   }
 
-  return { prompt, negative: buildNegative(style) };
+  return { prompt, negative: '' };
 }
