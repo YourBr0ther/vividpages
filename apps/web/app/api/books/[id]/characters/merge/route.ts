@@ -143,18 +143,21 @@ export async function POST(request: Request, { params }: RouteContext) {
       `merge: failed to enqueue imagine regen for book ${bookId}:`,
       error,
     );
-    const enqueueError = 'failed to enqueue imagine job';
+    const enqueueError = 'failed to enqueue imagine regen job';
     try {
+      // The merge committed and the book is fully usable; only the auto-regen
+      // didn't start. Return the book to 'ready' (not 'failed') and mark just
+      // the orphaned run failed so it doesn't linger 'running' behind the fence.
       await db
         .update(books)
-        .set({ status: 'failed', error: enqueueError })
+        .set({ status: 'ready', error: null })
         .where(eq(books.id, bookId));
       await db
         .update(pipelineRuns)
         .set({ status: 'failed', error: enqueueError })
         .where(eq(pipelineRuns.id, runId));
     } catch (bookkeepingError) {
-      console.error(`merge: failed to mark book ${bookId} as failed:`, bookkeepingError);
+      console.error(`merge: failed to reset book ${bookId} status after enqueue failure:`, bookkeepingError);
     }
     // The merge itself succeeded; surface that with a manual-regen note.
     return NextResponse.json({ character: keeper, regenerating: 0, note: manualNote });
