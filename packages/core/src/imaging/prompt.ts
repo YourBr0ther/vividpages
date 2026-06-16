@@ -47,6 +47,11 @@ export interface SceneForPrompt {
   setting: string | null;
   timeOfDay: string | null;
   mood: string | null;
+  /**
+   * Analyzed scene type (narrative|dialogue|action|description|transition), or
+   * null when unknown. Drives the camera shot via `shotFor`.
+   */
+  sceneType: string | null;
   keyVisualMoment: string | null;
 }
 
@@ -126,6 +131,30 @@ export function lightingFor(timeOfDay: string | null): string {
       return 'dim, low-key moonlit night lighting';
     default:
       return 'natural, even lighting';
+  }
+}
+
+/**
+ * Maps the analyzed `sceneType` to a camera shot phrase, so the framing varies
+ * with content instead of being hardcoded "cinematic wide shot" for every
+ * scene (Z-Image responds to explicit shot vocabulary). Case- and
+ * whitespace-insensitive; null/unknown/'ambiguous' fall back to a neutral
+ * cinematic wide shot.
+ */
+export function shotFor(sceneType: string | null): string {
+  const key = (sceneType ?? '').trim().toLowerCase();
+  switch (key) {
+    case 'dialogue':
+      return 'a medium two-shot';
+    case 'action':
+      return 'a dynamic wide shot from a low angle';
+    case 'description':
+    case 'transition':
+      return 'a wide establishing shot';
+    case 'narrative':
+      return 'a medium-wide shot';
+    default:
+      return 'a cinematic wide shot';
   }
 }
 
@@ -246,34 +275,35 @@ export function buildPortraitPrompt(args: {
 }
 
 interface SceneParts {
-  composition: string;
   moment: string;
   characters: string | null;
   setting: string | null;
   lighting: string;
   mood: string | null;
-  style: string;
   /** Fidelity instruction when mature is on; null otherwise. */
   fidelity: string | null;
+  shot: string;
+  style: string;
   technical: string;
 }
 
 /**
- * Joins the scaffold in reading order:
- * [composition] [action] [cast] [setting] [lighting] [mood] [style]
- * [fidelity?] [technical]. Null slots are omitted. The technical clause always
- * trails last.
+ * Joins the scaffold in Z-Image's director order:
+ * [action] [cast] [setting] [lighting] [mood] [fidelity?] [shot] [style]
+ * [technical]. The subject/action leads (early tokens steer composition) and
+ * the camera framing moves to just before the style; null slots are omitted.
+ * The technical clause always trails last.
  */
 function joinSceneParts(parts: SceneParts): string {
   return [
-    parts.composition,
     parts.moment,
     parts.characters,
     parts.setting,
     parts.lighting,
     parts.mood,
-    parts.style,
     parts.fidelity,
+    parts.shot,
+    parts.style,
     parts.technical,
   ]
     .filter((p): p is string => p !== null)
@@ -281,16 +311,17 @@ function joinSceneParts(parts: SceneParts): string {
 }
 
 /**
- * Scene illustration prompt as camera-structured prose. Leads with a cinematic
- * composition and the key visual moment as the action (falling back to the
+ * Scene illustration prompt as camera-structured prose in Z-Image's director
+ * order: the key visual moment as the action leads (falling back to the
  * summary, then a generic beat), then the present cast (name + verbatim
  * appearance, capped at MAX_SCENE_CHARACTERS), the setting, explicit lighting
- * derived from `timeOfDay`, the mood, the style preset as medium, and the
- * trailing technical clause.
+ * derived from `timeOfDay`, the mood, the camera shot derived from `sceneType`
+ * (via `shotFor`, positioned just before the style), the style preset as the
+ * medium, and the trailing technical clause.
  *
  * Under length pressure it drops character descriptions first (keeping the
- * names), then the setting clause — never the key moment, lighting, or style.
- * The negative is empty (inert on Z-Image Turbo). Deterministic.
+ * names), then the setting clause — never the key moment, lighting, shot, or
+ * style. The negative is empty (inert on Z-Image Turbo). Deterministic.
  */
 export function buildScenePrompt(args: {
   scene: SceneForPrompt;
@@ -307,13 +338,13 @@ export function buildScenePrompt(args: {
 
   const moment = scene.keyVisualMoment?.trim() || scene.summary?.trim() || SCENE_FALLBACK;
   const setting = scene.setting?.trim()
-    ? sentence(`The setting is ${normalizeFragment(scene.setting)}`)
+    ? sentence(`Setting: ${normalizeFragment(scene.setting)}`)
     : null;
 
   const lighting = sentence(`Lit with ${lightingFor(scene.timeOfDay)}`);
 
   const mood = scene.mood?.trim()
-    ? sentence(`The mood is ${normalizeFragment(scene.mood)}`)
+    ? sentence(`${normalizeFragment(scene.mood)} mood`)
     : null;
 
   const cast = args.characters.slice(0, MAX_SCENE_CHARACTERS).map((c) => ({
@@ -342,20 +373,20 @@ export function buildScenePrompt(args: {
   };
 
   const base: SceneParts = {
-    composition: 'A cinematic, illustrative wide shot.',
     moment: sentence(moment),
     characters: castClause(true),
     setting,
     lighting,
     mood,
-    style: sentence(`Rendered as ${normalizeFragment(style.promptFragment)}`),
     fidelity: args.mature ? IMAGING_FIDELITY_INSTRUCTION : null,
+    shot: sentence(`Composed as ${shotFor(scene.sceneType)}`),
+    style: sentence(`Rendered as ${normalizeFragment(style.promptFragment)}`),
     technical: TECHNICAL_CLAUSE,
   };
 
   // Drop order under length pressure: character descriptions (keep names),
-  // then the setting clause. The key moment, lighting, mood, style, and (when
-  // on) the fidelity instruction survive.
+  // then the setting clause. The key moment, lighting, mood, shot, style, and
+  // (when on) the fidelity instruction survive.
   const variants: SceneParts[] = [
     base,
     { ...base, characters: castClause(false) },
