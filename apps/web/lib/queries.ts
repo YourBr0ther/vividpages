@@ -585,3 +585,23 @@ export async function resolveLlmDisplay(
     model: book.llmModel ?? settings?.llmModel ?? 'llama3.1:8b',
   };
 }
+
+/** Cloud providers that decline mature content under their usage policies. */
+const CLOUD_PROVIDERS = new Set(['anthropic', 'openai']);
+
+/**
+ * Whether this book's effective LLM or image provider is a cloud provider
+ * (resolved book columns -> owner's user_settings -> defaults). Used to decide
+ * whether to show the "cloud providers may refuse mature content" note.
+ */
+export async function resolveProviderIsCloud(
+  userId: string,
+  book: { llmProvider: string | null; imageProvider: string | null },
+): Promise<boolean> {
+  const settings = await getDb().query.userSettings.findFirst({
+    where: eq(userSettings.userId, userId),
+  });
+  const llmProvider = book.llmProvider ?? settings?.llmProvider ?? 'ollama';
+  const imageProvider = book.imageProvider ?? settings?.imageProvider ?? 'comfyui';
+  return CLOUD_PROVIDERS.has(llmProvider) || CLOUD_PROVIDERS.has(imageProvider);
+}

@@ -8,6 +8,7 @@ import { FallbackCover, SpineOverlay } from '@/components/book-cover-art';
 import { CastStrip } from '@/components/cast-strip';
 import { ChapterList } from '@/components/chapter-list';
 import { DangerZone } from '@/components/danger-zone';
+import { MatureContentToggle } from '@/components/mature-content-toggle';
 import { PipelineControls } from '@/components/pipeline-controls';
 import { STATUS_LABELS } from '@/lib/book-card-data';
 import { findOwnedBook } from '@/lib/find-owned-book';
@@ -20,6 +21,7 @@ import {
   listCast,
   listChaptersWithScenes,
   resolveLlmDisplay,
+  resolveProviderIsCloud,
 } from '@/lib/queries';
 import { chapterLabel } from '@/lib/reader-types';
 
@@ -56,16 +58,25 @@ export default async function BookDetailPage({ params }: PageProps) {
   const { userId, book } = await loadOwnedBook(id);
   if (!book) notFound();
 
-  const [chapters, progress, cast, analyzedScenes, latestRun, llm, illustrationCount] =
-    await Promise.all([
-      listChaptersWithScenes(book.id),
-      getReadingProgress(userId, book.id),
-      listCast(book.id),
-      countAnalyzedScenes(book.id),
-      getLatestRun(book.id),
-      resolveLlmDisplay(userId, book),
-      countDoneImages(book.id),
-    ]);
+  const [
+    chapters,
+    progress,
+    cast,
+    analyzedScenes,
+    latestRun,
+    llm,
+    illustrationCount,
+    providerIsCloud,
+  ] = await Promise.all([
+    listChaptersWithScenes(book.id),
+    getReadingProgress(userId, book.id),
+    listCast(book.id),
+    countAnalyzedScenes(book.id),
+    getLatestRun(book.id),
+    resolveLlmDisplay(userId, book),
+    countDoneImages(book.id),
+    resolveProviderIsCloud(userId, book),
+  ]);
   const sceneCount = chapters.reduce((total, chapter) => total + chapter.sceneCount, 0);
   // Mirrors the imagine stage's portrait plan: significant roles with a token.
   const portraitCount = cast.filter(
@@ -185,6 +196,12 @@ export default async function BookDetailPage({ params }: PageProps) {
             portraitCount={portraitCount}
             provider={llm.provider}
             model={llm.model}
+          />
+
+          <MatureContentToggle
+            bookId={book.id}
+            initialMature={book.matureContent}
+            providerIsCloud={providerIsCloud}
           />
 
           <DangerZone bookId={book.id} bookTitle={book.title} />

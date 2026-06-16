@@ -16,6 +16,7 @@ const DEFAULTS: SettingsValues = {
   imageModel: null,
   ollamaUrl: null,
   comfyuiUrl: null,
+  matureContentDefault: false,
 };
 
 /**
@@ -53,6 +54,7 @@ export default async function SettingsPage() {
         imageModel: settingsRow.imageModel,
         ollamaUrl: settingsRow.ollamaUrl,
         comfyuiUrl: settingsRow.comfyuiUrl,
+        matureContentDefault: settingsRow.matureContentDefault,
       }
     : DEFAULTS;
 
