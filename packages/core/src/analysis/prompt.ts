@@ -17,10 +17,27 @@ export interface SceneAnalysisPromptArgs {
   /** Summary of the previous scene; null for the first scene. */
   prevSummary: string | null;
   bookTitle: string;
+  /**
+   * When true (opt-in, per-book), instruct the model to summarize mature
+   * content faithfully rather than euphemizing it. Default false — off-path
+   * output is byte-identical to omitting this flag.
+   */
+  mature?: boolean;
 }
 
 /** Scene text beyond this is middle-truncated with an '[...]' marker. */
 export const MAX_SCENE_TEXT_CHARS = 24_000;
+
+/**
+ * Fidelity instruction prepended to the analysis prompt when `mature` is on.
+ * Professional, non-graphic: it directs the model to be accurate and not
+ * sanitize; it contains no explicit material itself.
+ */
+export const ANALYSIS_FIDELITY_INSTRUCTION =
+  'This is an adult work for a private reader. Summarize what actually happens ' +
+  'in the scene plainly and accurately, including intimate, sexual, or violent ' +
+  'content — do not euphemize, omit, or fade to black. Such moments are ' +
+  'legitimate scene content.';
 
 function rosterLine(entry: RosterEntry): string {
   const aka = entry.aliases.length > 0 ? ` (aka ${entry.aliases.join(', ')})` : '';
@@ -51,6 +68,7 @@ export function buildSceneAnalysisPrompt(args: SceneAnalysisPromptArgs): {
       : '(no characters known yet — every character in this scene is new)';
 
   const prompt = [
+    ...(args.mature ? [ANALYSIS_FIDELITY_INSTRUCTION, ''] : []),
     `Book: ${args.bookTitle}`,
     '',
     `Previous scene summary: ${args.prevSummary ?? 'This is the first scene.'}`,

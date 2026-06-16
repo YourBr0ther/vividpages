@@ -4,6 +4,7 @@ import type { CharacterProfile } from '../src/analysis/profile-schema';
 import {
   buildPortraitPrompt,
   buildScenePrompt,
+  IMAGING_FIDELITY_INSTRUCTION,
   lightingFor,
   MAX_SCENE_CHARACTERS,
   MAX_SCENE_PROMPT_WORDS,
@@ -421,5 +422,108 @@ describe('buildScenePrompt', () => {
     expect(a).toEqual(b);
     expect(a.prompt).toBe(b.prompt);
     expect(a.negative).toBe(b.negative);
+  });
+});
+
+describe('mature-content fidelity (imaging)', () => {
+  const portraitOff = buildPortraitPrompt({ character: evie, style: painterly });
+  const sceneOff = buildScenePrompt({ scene: fullScene, characters: [evie], style: painterly });
+
+  it('the fidelity instruction asks for a faithful depiction matching source intensity', () => {
+    expect(IMAGING_FIDELITY_INSTRUCTION).toMatch(/faithful/i);
+    expect(IMAGING_FIDELITY_INSTRUCTION).toMatch(/intensity/i);
+  });
+
+  describe('buildPortraitPrompt', () => {
+    it('produces byte-identical output to current when mature is absent', () => {
+      expect(buildPortraitPrompt({ character: evie, style: painterly })).toEqual(portraitOff);
+    });
+
+    it('produces byte-identical output to the absent case when mature is false', () => {
+      expect(buildPortraitPrompt({ character: evie, style: painterly, mature: false })).toEqual(
+        portraitOff,
+      );
+    });
+
+    it('does not include the fidelity instruction when mature is off', () => {
+      expect(portraitOff.prompt).not.toContain(IMAGING_FIDELITY_INSTRUCTION);
+    });
+
+    it('includes the fidelity instruction when mature is on', () => {
+      const { prompt } = buildPortraitPrompt({ character: evie, style: painterly, mature: true });
+      expect(prompt).toContain(IMAGING_FIDELITY_INSTRUCTION);
+    });
+
+    it('still ends with the technical clause on the mature path', () => {
+      const { prompt, negative } = buildPortraitPrompt({
+        character: evie,
+        style: painterly,
+        mature: true,
+      });
+      looksLikeProse(prompt); // also asserts the trailing technical clause
+      expect(negative).toBe('');
+    });
+
+    it('is deterministic on the mature path', () => {
+      const a = buildPortraitPrompt({ character: { ...evie }, style: { ...painterly }, mature: true });
+      const b = buildPortraitPrompt({ character: { ...evie }, style: { ...painterly }, mature: true });
+      expect(a).toEqual(b);
+    });
+  });
+
+  describe('buildScenePrompt', () => {
+    it('produces byte-identical output to current when mature is absent', () => {
+      expect(buildScenePrompt({ scene: fullScene, characters: [evie], style: painterly })).toEqual(
+        sceneOff,
+      );
+    });
+
+    it('produces byte-identical output to the absent case when mature is false', () => {
+      expect(
+        buildScenePrompt({ scene: fullScene, characters: [evie], style: painterly, mature: false }),
+      ).toEqual(sceneOff);
+    });
+
+    it('does not include the fidelity instruction when mature is off', () => {
+      expect(sceneOff.prompt).not.toContain(IMAGING_FIDELITY_INSTRUCTION);
+    });
+
+    it('includes the fidelity instruction when mature is on', () => {
+      const { prompt } = buildScenePrompt({
+        scene: fullScene,
+        characters: [evie],
+        style: painterly,
+        mature: true,
+      });
+      expect(prompt).toContain(IMAGING_FIDELITY_INSTRUCTION);
+    });
+
+    it('still ends with the technical clause on the mature path', () => {
+      const { prompt, negative } = buildScenePrompt({
+        scene: fullScene,
+        characters: [evie],
+        style: painterly,
+        mature: true,
+      });
+      looksLikeProse(prompt); // also asserts the trailing technical clause
+      expect(negative).toBe('');
+    });
+
+    it('keeps the key visual moment and style on the mature path', () => {
+      const { prompt } = buildScenePrompt({
+        scene: fullScene,
+        characters: [evie],
+        style: painterly,
+        mature: true,
+      });
+      expect(prompt).toContain('Evie slams the ledger onto the desk as candle flames gutter');
+      expect(prompt).toContain(painterly.promptFragment);
+    });
+
+    it('is deterministic on the mature path', () => {
+      const a = buildScenePrompt({ scene: { ...fullScene }, characters: [{ ...evie }], style: { ...painterly }, mature: true });
+      const b = buildScenePrompt({ scene: { ...fullScene }, characters: [{ ...evie }], style: { ...painterly }, mature: true });
+      expect(a).toEqual(b);
+    });
   });
 });

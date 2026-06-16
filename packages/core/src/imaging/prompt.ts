@@ -60,6 +60,15 @@ const SCENE_FALLBACK = 'A quiet narrative moment';
  */
 const TECHNICAL_CLAUSE = 'No text, watermarks, or logos.';
 
+/**
+ * Fidelity instruction folded into the positive prompt (just before the
+ * trailing technical clause) when `mature` is on, for both portrait and scene
+ * builders. Professional, non-graphic: it asks the model to be faithful, and
+ * contains no explicit material itself. The technical clause still trails last.
+ */
+export const IMAGING_FIDELITY_INSTRUCTION =
+  "Depict the moment faithfully and accurately, matching the source's intensity.";
+
 const countWords = (s: string): number => s.split(/\s+/).filter(Boolean).length;
 
 /** Trims, collapses whitespace, and strips trailing punctuation. */
@@ -193,6 +202,12 @@ export function renderCharacterDescription(c: CharacterForPrompt): string {
 export function buildPortraitPrompt(args: {
   character: CharacterForPrompt;
   style: StyleFragment;
+  /**
+   * When true (opt-in, per-book), append the fidelity instruction before the
+   * trailing technical clause. Default false — off-path output is
+   * byte-identical to omitting this flag.
+   */
+  mature?: boolean;
 }): { prompt: string; negative: string } {
   const name = normalizeFragment(args.character.name);
   const description = renderCharacterDescription(args.character);
@@ -207,6 +222,7 @@ export function buildPortraitPrompt(args: {
     'Lit with even, soft studio lighting.',
     sentence(`Rendered as ${normalizeFragment(args.style.promptFragment)}`),
     'A focused, dignified character study.',
+    ...(args.mature ? [IMAGING_FIDELITY_INSTRUCTION] : []),
     TECHNICAL_CLAUSE,
   ].join(' ');
 
@@ -221,13 +237,16 @@ interface SceneParts {
   lighting: string;
   mood: string | null;
   style: string;
+  /** Fidelity instruction when mature is on; null otherwise. */
+  fidelity: string | null;
   technical: string;
 }
 
 /**
  * Joins the scaffold in reading order:
- * [composition] [action] [cast] [setting] [lighting] [mood] [style] [technical].
- * Null slots are omitted. The technical clause always trails last.
+ * [composition] [action] [cast] [setting] [lighting] [mood] [style]
+ * [fidelity?] [technical]. Null slots are omitted. The technical clause always
+ * trails last.
  */
 function joinSceneParts(parts: SceneParts): string {
   return [
@@ -238,6 +257,7 @@ function joinSceneParts(parts: SceneParts): string {
     parts.lighting,
     parts.mood,
     parts.style,
+    parts.fidelity,
     parts.technical,
   ]
     .filter((p): p is string => p !== null)
@@ -260,6 +280,12 @@ export function buildScenePrompt(args: {
   scene: SceneForPrompt;
   characters: CharacterForPrompt[];
   style: StyleFragment;
+  /**
+   * When true (opt-in, per-book), fold the fidelity instruction in before the
+   * trailing technical clause. Default false — off-path output is
+   * byte-identical to omitting this flag.
+   */
+  mature?: boolean;
 }): { prompt: string; negative: string } {
   const { scene, style } = args;
 
@@ -301,11 +327,13 @@ export function buildScenePrompt(args: {
     lighting,
     mood,
     style: sentence(`Rendered as ${normalizeFragment(style.promptFragment)}`),
+    fidelity: args.mature ? IMAGING_FIDELITY_INSTRUCTION : null,
     technical: TECHNICAL_CLAUSE,
   };
 
   // Drop order under length pressure: character descriptions (keep names),
-  // then the setting clause. The key moment, lighting, mood, and style survive.
+  // then the setting clause. The key moment, lighting, mood, style, and (when
+  // on) the fidelity instruction survive.
   const variants: SceneParts[] = [
     base,
     { ...base, characters: castClause(false) },
