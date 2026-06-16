@@ -6,7 +6,7 @@ import { auth } from '@/auth';
 import { CharacterCard } from '@/components/character-card';
 import { MinorCastDisclosure } from '@/components/minor-cast-disclosure';
 import { findOwnedBook } from '@/lib/find-owned-book';
-import { listCast, type CastMember, type CastRole } from '@/lib/queries';
+import { listCast, type CastMember } from '@/lib/queries';
 
 type PageProps = { params: Promise<{ id: string }> };
 
@@ -23,13 +23,6 @@ export async function generateMetadata({ params }: PageProps) {
   const book = await loadOwnedBook(id);
   return { title: book ? `The Cast · ${book.title}` : 'VividPages' };
 }
-
-/** Section headings per role, with their accent tint. */
-const SECTIONS: Array<{ role: CastRole; singular: string; plural: string; tint: string }> = [
-  { role: 'protagonist', singular: 'Protagonist', plural: 'Protagonists', tint: 'text-ember-300' },
-  { role: 'antagonist', singular: 'Antagonist', plural: 'Antagonists', tint: 'text-red-300' },
-  { role: 'supporting', singular: 'Supporting', plural: 'Supporting', tint: 'text-stone-400' },
-];
 
 function SectionHeading({ label, count, tint }: { label: string; count: number; tint: string }) {
   return (
@@ -62,8 +55,9 @@ function CardGrid({
 }
 
 /**
- * The dramatis personae: every character the analysis discovered, grouped by
- * narrative role, leads first, the long tail of minor characters folded away.
+ * The dramatis personae: every character the analysis discovered, split into
+ * the main cast (followed across the book) and the long tail of minor
+ * characters, folded away behind a disclosure.
  */
 export default async function CastPage({ params }: PageProps) {
   const { id } = await params;
@@ -71,13 +65,8 @@ export default async function CastPage({ params }: PageProps) {
   if (!book) notFound();
 
   const cast = await listCast(book.id);
-  const byRole = new Map<CastRole, CastMember[]>();
-  for (const member of cast) {
-    const list = byRole.get(member.role);
-    if (list) list.push(member);
-    else byRole.set(member.role, [member]);
-  }
-  const minor = byRole.get('minor') ?? [];
+  const main = cast.filter((m) => m.role === 'main');
+  const minor = cast.filter((m) => m.role === 'minor');
 
   return (
     <div className="animate-rise">
@@ -127,24 +116,16 @@ export default async function CastPage({ params }: PageProps) {
         </section>
       ) : (
         <div className="mt-12 space-y-14">
-          {SECTIONS.flatMap(({ role, singular, plural, tint }) => {
-            const members = byRole.get(role) ?? [];
-            if (members.length === 0) return [];
-            return [
-              <section key={role} aria-label={plural} className="space-y-6">
-                <SectionHeading
-                  label={members.length === 1 ? singular : plural}
-                  count={members.length}
-                  tint={tint}
-                />
-                <CardGrid members={members} bookId={book.id} cast={cast} />
-              </section>,
-            ];
-          })}
+          {main.length > 0 ? (
+            <section aria-label="Main cast" className="space-y-6">
+              <SectionHeading label="Main cast" count={main.length} tint="text-ember-300" />
+              <CardGrid members={main} bookId={book.id} cast={cast} />
+            </section>
+          ) : null}
 
           {minor.length > 0 ? (
             <section aria-label="Minor characters" className="space-y-6">
-              <SectionHeading label="Minor" count={minor.length} tint="text-stone-500" />
+              <SectionHeading label="Minor characters" count={minor.length} tint="text-stone-500" />
               <MinorCastDisclosure count={minor.length}>
                 <CardGrid members={minor} bookId={book.id} cast={cast} />
               </MinorCastDisclosure>

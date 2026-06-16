@@ -82,8 +82,8 @@ describe('buildProfilePrompt', () => {
   it('includes sceneCount and role guidance', () => {
     const { prompt } = buildProfilePrompt(baseArgs);
     expect(prompt).toContain('85');
-    for (const role of ['protagonist', 'antagonist', 'supporting', 'minor']) {
-      expect(prompt).toContain(role);
+    for (const role of ['main', 'minor']) {
+      expect(prompt).toContain(`'${role}'`);
     }
   });
 

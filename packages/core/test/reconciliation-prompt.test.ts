@@ -12,7 +12,7 @@ const survivor = (over: Partial<SurvivorCharacter> = {}): SurvivorCharacter => (
   descriptionSample: null,
   embedding: null,
   sceneCount: 10,
-  role: 'protagonist',
+  role: 'main',
   hasProfile: true,
   ...over,
 });
