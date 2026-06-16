@@ -26,7 +26,7 @@ const profile = (overrides: Partial<CharacterProfile>): CharacterProfile => ({
   attire: null,
   distinguishing: null,
   oneLine: 'a character',
-  role: 'supporting',
+  role: 'main',
   ...overrides,
 });
 

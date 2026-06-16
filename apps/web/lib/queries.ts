@@ -268,8 +268,8 @@ export async function getReadingProgress(userId: string, bookId: string) {
 // Cast & pipeline
 // ---------------------------------------------------------------------------
 
-/** Narrative roles in cast-gallery display order. */
-export const CAST_ROLE_ORDER = ['protagonist', 'antagonist', 'supporting', 'minor'] as const;
+/** Character roles in cast-gallery display order (main cast first). */
+export const CAST_ROLE_ORDER = ['main', 'minor'] as const;
 export type CastRole = (typeof CAST_ROLE_ORDER)[number];
 
 /** The visual profile jsonb, narrowed to the fields the UI renders. */

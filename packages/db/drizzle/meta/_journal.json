@@ -57,6 +57,13 @@
       "when": 1781619412455,
       "tag": "0007_panoramic_grim_reaper",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1781619512455,
+      "tag": "0008_collapse_character_roles",
+      "breakpoints": true
     }
   ]
 }

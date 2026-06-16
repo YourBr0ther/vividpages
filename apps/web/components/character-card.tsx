@@ -1,24 +1,9 @@
-import type { CastMember, CastRole } from '@/lib/queries';
+import type { CastMember } from '@/lib/queries';
 
 import { bindingFor } from './book-cover-art';
 import { CharacterLoraConfig } from './character-lora-config';
 import { CharacterMergeAction } from './character-merge-action';
 import { PortraitLightbox } from './portrait-lightbox';
-
-/** Role badge tints: ember for leads, deep red for villains, quiet otherwise. */
-const ROLE_BADGE_CLASS: Record<CastRole, string> = {
-  protagonist: 'border-ember-400/40 bg-ember-400/10 text-ember-300',
-  antagonist: 'border-red-400/40 bg-red-950/50 text-red-300',
-  supporting: 'border-stone-700 bg-stone-900/70 text-stone-400',
-  minor: 'border-stone-800 bg-stone-900/50 text-stone-500',
-};
-
-const ROLE_LABEL: Record<CastRole, string> = {
-  protagonist: 'Protagonist',
-  antagonist: 'Antagonist',
-  supporting: 'Supporting',
-  minor: 'Minor',
-};
 
 /** The trait fields rendered as chips, in display order. */
 const CHIP_TRAITS = [
@@ -62,9 +47,10 @@ function Portrait({ member }: { member: CastMember }) {
 }
 
 /**
- * One member of the cast: portrait plate, name, role badge, aliases, the
- * one-line visual identity, quiet trait chips, and the appearance token
- * behind a disclosure for transparency. Server-renderable (no hooks).
+ * One member of the cast: portrait plate, name, aliases, the one-line visual
+ * identity, quiet trait chips, and the appearance token behind a disclosure
+ * for transparency. The main/minor distinction is carried by the section
+ * heading on the cast page, not a per-card badge. Server-renderable (no hooks).
  */
 export function CharacterCard({
   member,
@@ -99,16 +85,9 @@ export function CharacterCard({
       </div>
 
       <div className="flex flex-1 flex-col gap-2 p-4">
-        <div className="flex items-start justify-between gap-2">
-          <h3 className="min-w-0 truncate font-display text-lg leading-tight tracking-tight text-parchment">
-            {member.name}
-          </h3>
-          <span
-            className={`mt-0.5 shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.18em] ${ROLE_BADGE_CLASS[member.role]}`}
-          >
-            {ROLE_LABEL[member.role]}
-          </span>
-        </div>
+        <h3 className="min-w-0 truncate font-display text-lg leading-tight tracking-tight text-parchment">
+          {member.name}
+        </h3>
 
         {member.aliases.length > 0 ? (
           <p className="truncate text-xs text-stone-500" title={member.aliases.join(', ')}>

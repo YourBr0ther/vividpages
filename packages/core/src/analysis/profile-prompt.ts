@@ -99,7 +99,7 @@ export function buildProfilePrompt(args: ProfilePromptArgs): { system: string; p
     '- State traits plainly; omit uncertain ones; never add commentary or qualifiers (no "possibly", "implied", "not specified", or parenthetical notes — use null instead).',
     '- attire: the typical/default outfit, not one-scene costumes.',
     '- distinguishing: PERMANENT identifying features only — scars that last, tattoos, props always carried. EXCLUDE temporary states: fresh injuries, blood, dirt, bruises, wet clothes, one-scene accessories.',
-    "- role: the character's narrative importance — 'protagonist' (the single central point-of-view character; a book has at most one or two), 'antagonist' (the main opposing character), 'supporting' (recurring companions, family, colleagues), or 'minor' (a scene or two). The scene-appearance count above is the strongest hint.",
+    "- role: 'main' (a central or recurring character the reader follows) or 'minor' (appears in only a scene or two). The scene-appearance count above is the strongest hint.",
     '- oneLine: a compact, stable visual identity line (max 140 characters) for use in image prompts — no temporary injuries or states, e.g. "young woman with lavender hair and ink-stained fingers in a practical work dress".',
   ].join('\n');
 

@@ -213,26 +213,23 @@ export function buildReconciliationPrompt(
   return { system, prompt };
 }
 
-/** Scene-share at/above which a character must be protagonist/antagonist. */
-const LEAD_SCENE_RATIO = 0.4;
-/** Scene-share at/above which 'minor' is raised to 'supporting'. */
-const SUPPORTING_SCENE_RATIO = 0.05;
+/** Scene-share at/above which a character is forced to 'main'. */
+export const MAIN_SCENE_RATIO = 0.12;
 
 /**
- * Deterministic floor under the LLM's role judgment: small local models are
- * noisy here (one run calls every named character 'protagonist', the next
- * calls an 85-of-101-scene narrator 'supporting'). Scene share is the
- * strongest importance signal we hold, so it can RAISE a role — never lower
- * one — while protagonist-vs-antagonist stays the model's call.
+ * Deterministic floor under the LLM's main/minor judgment: small local models
+ * are noisy here (one run calls an 85-of-101-scene narrator 'minor'). Scene
+ * share is the strongest importance signal we hold, so a character appearing in
+ * >= MAIN_SCENE_RATIO of the book's scenes is forced 'main'; below the floor the
+ * LLM's call stands (it can flag a low-frequency-but-pivotal character as main,
+ * and the rest stay minor). Raises only — never lowers — like the old clamp.
  */
-function clampRole(
+export function clampMainMinor(
   role: CharacterProfile['role'],
   sceneCount: number,
   totalScenes: number,
 ): CharacterProfile['role'] {
-  const ratio = totalScenes > 0 ? sceneCount / totalScenes : 0;
-  if (ratio >= LEAD_SCENE_RATIO) return role === 'antagonist' ? 'antagonist' : 'protagonist';
-  if (ratio >= SUPPORTING_SCENE_RATIO && role === 'minor') return 'supporting';
+  if (totalScenes > 0 && sceneCount / totalScenes >= MAIN_SCENE_RATIO) return 'main';
   return role;
 }
 
@@ -520,7 +517,7 @@ export async function runProfiles(payload: ProfilesJobPayload): Promise<void> {
         });
         await incrementRunTokens(runId, result.tokensIn, result.tokensOut);
         const profile = normalizeProfile(result.value);
-        profile.role = clampRole(profile.role, s.sceneCount, totalScenes);
+        profile.role = clampMainMinor(profile.role, s.sceneCount, totalScenes);
         const appearanceToken = compileAppearanceToken(s.name, profile);
         await db
           .update(characters)

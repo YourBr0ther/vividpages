@@ -76,7 +76,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 const DEFAULT_STYLE_SLUG = 'painterly-fantasy';
 
 /** Roles that get a portrait ('minor' characters are skipped). */
-const PORTRAIT_ROLES = new Set(['protagonist', 'antagonist', 'supporting']);
+const PORTRAIT_ROLES = new Set(['main']);
 
 /** 3:4 portrait — Z-Image/SD3 latents want multiples of 64. */
 const PORTRAIT_WIDTH = 832;

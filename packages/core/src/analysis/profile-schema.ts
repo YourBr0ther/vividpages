@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-/** Narrative roles, by decreasing importance. */
-export const CHARACTER_ROLES = ['protagonist', 'antagonist', 'supporting', 'minor'] as const;
+/** Character roles: `main` (followed across the book) vs `minor` (a scene or two). */
+export const CHARACTER_ROLES = ['main', 'minor'] as const;
 export type CharacterRole = (typeof CHARACTER_ROLES)[number];
 
 /** Max length of the compact one-line visual identity. */
