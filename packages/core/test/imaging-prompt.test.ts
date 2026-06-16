@@ -9,6 +9,7 @@ import {
   MAX_SCENE_CHARACTERS,
   MAX_SCENE_PROMPT_WORDS,
   renderCharacterDescription,
+  shotFor,
   type CharacterForPrompt,
   type SceneForPrompt,
   type StyleFragment,
@@ -95,6 +96,29 @@ describe('lightingFor', () => {
     expect(lightingFor(null)).toBe('natural, even lighting');
     expect(lightingFor('')).toBe('natural, even lighting');
     expect(lightingFor('sometime')).toBe('natural, even lighting');
+  });
+});
+
+describe('shotFor', () => {
+  it('maps each known sceneType to a camera shot phrase', () => {
+    expect(shotFor('dialogue')).toBe('a medium two-shot');
+    expect(shotFor('action')).toBe('a dynamic wide shot from a low angle');
+    expect(shotFor('description')).toBe('a wide establishing shot');
+    expect(shotFor('transition')).toBe('a wide establishing shot');
+    expect(shotFor('narrative')).toBe('a medium-wide shot');
+  });
+
+  it('is case- and whitespace-insensitive', () => {
+    expect(shotFor('  Dialogue ')).toBe('a medium two-shot');
+    expect(shotFor('ACTION')).toBe('a dynamic wide shot from a low angle');
+    expect(shotFor('Narrative')).toBe('a medium-wide shot');
+  });
+
+  it('falls back to a cinematic wide shot for null, unknown, or ambiguous', () => {
+    expect(shotFor(null)).toBe('a cinematic wide shot');
+    expect(shotFor('')).toBe('a cinematic wide shot');
+    expect(shotFor('ambiguous')).toBe('a cinematic wide shot');
+    expect(shotFor('something-else')).toBe('a cinematic wide shot');
   });
 });
 
@@ -234,6 +258,7 @@ const fullScene: SceneForPrompt = {
   setting: 'a candlelit study lined with stolen artifacts',
   timeOfDay: 'evening',
   mood: 'tense',
+  sceneType: 'dialogue',
   keyVisualMoment: 'Evie slams the ledger onto the desk as candle flames gutter',
 };
 
@@ -375,6 +400,7 @@ describe('buildScenePrompt', () => {
       setting: null,
       timeOfDay: null,
       mood: null,
+      sceneType: null,
       keyVisualMoment: null,
     };
     const { prompt } = buildScenePrompt({ scene: empty, characters: [], style: painterly });
@@ -422,6 +448,88 @@ describe('buildScenePrompt', () => {
     expect(a).toEqual(b);
     expect(a.prompt).toBe(b.prompt);
     expect(a.negative).toBe(b.negative);
+  });
+
+  it('leads with the action/key moment before the shot/camera phrase (director order)', () => {
+    const { prompt } = buildScenePrompt({
+      scene: fullScene,
+      characters: [evie],
+      style: painterly,
+    });
+    const momentAt = prompt.indexOf('Evie slams the ledger');
+    const shotAt = prompt.indexOf(shotFor(fullScene.sceneType));
+    expect(momentAt).toBeGreaterThanOrEqual(0);
+    expect(shotAt).toBeGreaterThan(momentAt);
+  });
+
+  it('positions the shot/camera phrase just before the style fragment', () => {
+    const { prompt } = buildScenePrompt({
+      scene: fullScene,
+      characters: [evie],
+      style: painterly,
+    });
+    const shotAt = prompt.indexOf(shotFor(fullScene.sceneType));
+    const styleAt = prompt.indexOf(painterly.promptFragment);
+    expect(shotAt).toBeGreaterThanOrEqual(0);
+    expect(styleAt).toBeGreaterThan(shotAt);
+  });
+
+  it('orders subject/action before setting before lighting before mood before shot before style', () => {
+    const { prompt } = buildScenePrompt({
+      scene: fullScene,
+      characters: [evie],
+      style: painterly,
+    });
+    const momentAt = prompt.indexOf('Evie slams the ledger');
+    const castAt = prompt.indexOf('Featuring');
+    const settingAt = prompt.indexOf('candlelit study');
+    const lightingAt = prompt.indexOf('warm golden-hour light');
+    const moodAt = prompt.toLowerCase().indexOf('tense');
+    const shotAt = prompt.indexOf(shotFor('dialogue'));
+    const styleAt = prompt.indexOf(painterly.promptFragment);
+    expect(momentAt).toBeGreaterThanOrEqual(0);
+    expect(castAt).toBeGreaterThan(momentAt);
+    expect(settingAt).toBeGreaterThan(castAt);
+    expect(lightingAt).toBeGreaterThan(settingAt);
+    expect(moodAt).toBeGreaterThan(lightingAt);
+    expect(shotAt).toBeGreaterThan(moodAt);
+    expect(styleAt).toBeGreaterThan(shotAt);
+  });
+
+  it('derives the shot from sceneType: a dialogue scene uses a medium two-shot', () => {
+    const { prompt } = buildScenePrompt({
+      scene: { ...fullScene, sceneType: 'dialogue' },
+      characters: [evie, tom],
+      style: painterly,
+    });
+    expect(prompt).toContain('a medium two-shot');
+  });
+
+  it('derives the shot from sceneType: an action scene uses a dynamic low-angle wide shot', () => {
+    const { prompt } = buildScenePrompt({
+      scene: { ...fullScene, sceneType: 'action' },
+      characters: [evie],
+      style: painterly,
+    });
+    expect(prompt).toContain('a dynamic wide shot from a low angle');
+  });
+
+  it('derives the shot from sceneType: a description scene uses a wide establishing shot', () => {
+    const { prompt } = buildScenePrompt({
+      scene: { ...fullScene, sceneType: 'description' },
+      characters: [],
+      style: painterly,
+    });
+    expect(prompt).toContain('a wide establishing shot');
+  });
+
+  it('falls back to a cinematic wide shot when sceneType is null', () => {
+    const { prompt } = buildScenePrompt({
+      scene: { ...fullScene, sceneType: null },
+      characters: [],
+      style: painterly,
+    });
+    expect(prompt).toContain('a cinematic wide shot');
   });
 });
 

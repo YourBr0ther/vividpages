@@ -8,7 +8,8 @@ const scene = (
   setting: string | null,
   timeOfDay: string | null = null,
   mood: string | null = null,
-) => ({ startOffset, endOffset, setting, timeOfDay, mood });
+  sceneType: string | null = null,
+) => ({ startOffset, endOffset, setting, timeOfDay, mood, sceneType });
 
 describe('sceneContextForOffset', () => {
   it('returns the empty context when no scenes exist', () => {
@@ -16,18 +17,20 @@ describe('sceneContextForOffset', () => {
       setting: null,
       timeOfDay: null,
       mood: null,
+      sceneType: null,
     });
   });
 
-  it('borrows setting/mood/timeOfDay from the scene containing the offset', () => {
+  it('borrows setting/mood/timeOfDay/sceneType from the scene containing the offset', () => {
     const scenes = [
-      scene(0, 100, 'tavern', 'evening', 'tense'),
-      scene(100, 200, 'forest', 'dawn', 'eerie'),
+      scene(0, 100, 'tavern', 'evening', 'tense', 'dialogue'),
+      scene(100, 200, 'forest', 'dawn', 'eerie', 'action'),
     ];
     expect(sceneContextForOffset(scenes, 150)).toEqual({
       setting: 'forest',
       timeOfDay: 'dawn',
       mood: 'eerie',
+      sceneType: 'action',
     });
   });
 

@@ -178,6 +178,7 @@ interface SceneRow {
   setting: string | null;
   timeOfDay: string | null;
   mood: string | null;
+  sceneType: string | null;
   keyVisualMoment: string | null;
 }
 
@@ -194,6 +195,7 @@ async function loadAnalyzedScenes(db: Db, bookId: string): Promise<SceneRow[]> {
       setting: scenes.setting,
       timeOfDay: scenes.timeOfDay,
       mood: scenes.mood,
+      sceneType: scenes.sceneType,
       keyVisualMoment: scenes.keyVisualMoment,
     })
     .from(scenes)
@@ -201,14 +203,20 @@ async function loadAnalyzedScenes(db: Db, bookId: string): Promise<SceneRow[]> {
     .orderBy(asc(scenes.globalIdx));
 }
 
-/** Setting/mood/timeOfDay borrowed from an analyzed scene for a point's prompt. */
+/** Setting/mood/timeOfDay/sceneType borrowed from an analyzed scene for a point's prompt. */
 export interface SceneContext {
   setting: string | null;
   timeOfDay: string | null;
   mood: string | null;
+  sceneType: string | null;
 }
 
-const EMPTY_SCENE_CONTEXT: SceneContext = { setting: null, timeOfDay: null, mood: null };
+const EMPTY_SCENE_CONTEXT: SceneContext = {
+  setting: null,
+  timeOfDay: null,
+  mood: null,
+  sceneType: null,
+};
 
 /**
  * Resolves the setting/mood/timeOfDay for an illustration point. Points are
@@ -226,6 +234,7 @@ export function sceneContextForOffset(
     setting: string | null;
     timeOfDay: string | null;
     mood: string | null;
+    sceneType: string | null;
   }>,
   charOffset: number,
 ): SceneContext {
@@ -237,7 +246,12 @@ export function sceneContextForOffset(
   // lands in no scene span (e.g. a gap, or a quote located in trailing text).
   const first = chapterScenes.reduce((a, b) => (a.startOffset <= b.startOffset ? a : b));
   const src = containing ?? first;
-  return { setting: src.setting, timeOfDay: src.timeOfDay, mood: src.mood };
+  return {
+    setting: src.setting,
+    timeOfDay: src.timeOfDay,
+    mood: src.mood,
+    sceneType: src.sceneType,
+  };
 }
 
 /**
@@ -1110,6 +1124,7 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
         setting: ctx.setting,
         timeOfDay: ctx.timeOfDay,
         mood: ctx.mood,
+        sceneType: ctx.sceneType,
         keyVisualMoment: point.momentDescription,
       },
       characters: cast,
