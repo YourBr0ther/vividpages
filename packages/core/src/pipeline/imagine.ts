@@ -336,6 +336,8 @@ interface IllustrationPointRow {
   charOffset: number;
   momentDescription: string;
   presentCharacterIds: string[];
+  /** LLM importance rank (1–5), when known; tightens 1–2 character framing. */
+  score: number | null;
 }
 
 /**
@@ -377,6 +379,7 @@ async function loadIllustrationPoints(db: Db, bookId: string): Promise<Illustrat
       charOffset: illustrationPoints.charOffset,
       momentDescription: illustrationPoints.momentDescription,
       presentCharacterIds: illustrationPoints.presentCharacterIds,
+      score: illustrationPoints.score,
     })
     .from(illustrationPoints)
     .where(eq(illustrationPoints.bookId, bookId))
@@ -1130,6 +1133,8 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
       characters: cast,
       style: styleFragment,
       mature: book.matureContent,
+      // Importance pulls a tight 1–2 character beat slightly tighter still.
+      importance: point.score,
     });
     // Scene LoRA chain: present cast's LoRAs, deduped by name, capped; dropped
     // names are logged (their prompt description still stands).

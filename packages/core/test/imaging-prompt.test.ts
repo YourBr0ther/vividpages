@@ -4,6 +4,7 @@ import type { CharacterProfile } from '../src/analysis/profile-schema';
 import {
   buildPortraitPrompt,
   buildScenePrompt,
+  framingFor,
   IMAGING_FIDELITY_INSTRUCTION,
   lightingFor,
   MAX_SCENE_CHARACTERS,
@@ -457,7 +458,7 @@ describe('buildScenePrompt', () => {
       style: painterly,
     });
     const momentAt = prompt.indexOf('Evie slams the ledger');
-    const shotAt = prompt.indexOf(shotFor(fullScene.sceneType));
+    const shotAt = prompt.indexOf(framingFor(fullScene.sceneType, { characterCount: 1 }));
     expect(momentAt).toBeGreaterThanOrEqual(0);
     expect(shotAt).toBeGreaterThan(momentAt);
   });
@@ -468,7 +469,7 @@ describe('buildScenePrompt', () => {
       characters: [evie],
       style: painterly,
     });
-    const shotAt = prompt.indexOf(shotFor(fullScene.sceneType));
+    const shotAt = prompt.indexOf(framingFor(fullScene.sceneType, { characterCount: 1 }));
     const styleAt = prompt.indexOf(painterly.promptFragment);
     expect(shotAt).toBeGreaterThanOrEqual(0);
     expect(styleAt).toBeGreaterThan(shotAt);
@@ -485,7 +486,7 @@ describe('buildScenePrompt', () => {
     const settingAt = prompt.indexOf('candlelit study');
     const lightingAt = prompt.indexOf('warm golden-hour light');
     const moodAt = prompt.toLowerCase().indexOf('tense');
-    const shotAt = prompt.indexOf(shotFor('dialogue'));
+    const shotAt = prompt.indexOf(framingFor('dialogue', { characterCount: 1 }));
     const styleAt = prompt.indexOf(painterly.promptFragment);
     expect(momentAt).toBeGreaterThanOrEqual(0);
     expect(castAt).toBeGreaterThan(momentAt);
@@ -496,13 +497,13 @@ describe('buildScenePrompt', () => {
     expect(styleAt).toBeGreaterThan(shotAt);
   });
 
-  it('derives the shot from sceneType: a dialogue scene uses a medium two-shot', () => {
+  it('derives the shot from sceneType + count: a two-character dialogue scene uses a waist-up two-shot', () => {
     const { prompt } = buildScenePrompt({
       scene: { ...fullScene, sceneType: 'dialogue' },
       characters: [evie, tom],
       style: painterly,
     });
-    expect(prompt).toContain('a medium two-shot');
+    expect(prompt).toContain('a waist-up two-shot');
   });
 
   it('derives the shot from sceneType: an action scene uses a dynamic low-angle wide shot', () => {
@@ -530,6 +531,247 @@ describe('buildScenePrompt', () => {
       style: painterly,
     });
     expect(prompt).toContain('a cinematic wide shot');
+  });
+});
+
+describe('framingFor', () => {
+  // action keeps the dynamic low-angle wide regardless of how many are in frame.
+  it('keeps the dynamic low-angle wide for action at any character count', () => {
+    for (const count of [0, 1, 2, 3, 5]) {
+      expect(framingFor('action', { characterCount: count })).toBe(
+        'a dynamic wide shot from a low angle',
+      );
+    }
+  });
+
+  // description/transition stay wide establishing (scene-setting; faces not the point).
+  it('keeps a wide establishing shot for description/transition at any count', () => {
+    for (const type of ['description', 'transition']) {
+      for (const count of [0, 1, 2, 3]) {
+        expect(framingFor(type, { characterCount: count })).toBe('a wide establishing shot');
+      }
+    }
+  });
+
+  // dialogue/narrative/unknown with 1 character → tighter waist-up medium so the
+  // single face renders large.
+  it('tightens to a waist-up medium for a single character in dialogue/narrative/unknown', () => {
+    expect(framingFor('dialogue', { characterCount: 1 })).toBe('a medium shot, waist-up');
+    expect(framingFor('narrative', { characterCount: 1 })).toBe('a medium shot, waist-up');
+    expect(framingFor('mystery', { characterCount: 1 })).toBe('a medium shot, waist-up');
+    expect(framingFor(null, { characterCount: 1 })).toBe('a medium shot, waist-up');
+  });
+
+  // dialogue/narrative/unknown with 2 characters → a medium close-up two-shot.
+  it('uses a waist-up two-shot for two characters in dialogue/narrative/unknown', () => {
+    expect(framingFor('dialogue', { characterCount: 2 })).toBe('a waist-up two-shot');
+    expect(framingFor('narrative', { characterCount: 2 })).toBe('a waist-up two-shot');
+    expect(framingFor('mystery', { characterCount: 2 })).toBe('a waist-up two-shot');
+    expect(framingFor(null, { characterCount: 2 })).toBe('a waist-up two-shot');
+  });
+
+  // importance >= 4 pulls slightly tighter still for the 1–2 band.
+  it('pulls tighter to a medium close-up for high-importance 1–2 character beats', () => {
+    expect(framingFor('dialogue', { characterCount: 1, importance: 4 })).toBe(
+      'a medium close-up',
+    );
+    expect(framingFor('dialogue', { characterCount: 2, importance: 5 })).toBe(
+      'a medium close-up two-shot',
+    );
+    expect(framingFor('narrative', { characterCount: 1, importance: 4 })).toBe(
+      'a medium close-up',
+    );
+  });
+
+  it('does not pull tighter below the importance threshold', () => {
+    expect(framingFor('dialogue', { characterCount: 1, importance: 3 })).toBe(
+      'a medium shot, waist-up',
+    );
+    expect(framingFor('dialogue', { characterCount: 2, importance: 3 })).toBe('a waist-up two-shot');
+  });
+
+  // The boundary: 2 stays tight, 3+ widens to a group shot (accept smaller faces).
+  it('widens to a wide group shot at 3+ characters (boundary at 2 vs 3)', () => {
+    expect(framingFor('dialogue', { characterCount: 2 })).toBe('a waist-up two-shot');
+    expect(framingFor('dialogue', { characterCount: 3 })).toBe('a wide group shot');
+    expect(framingFor('narrative', { characterCount: 4 })).toBe('a wide group shot');
+    // importance does not override the group-widen decision.
+    expect(framingFor('dialogue', { characterCount: 3, importance: 5 })).toBe('a wide group shot');
+  });
+
+  // With zero characters there is nobody to frame tight; fall back to shotFor.
+  it('falls back to shotFor when there are no characters in frame', () => {
+    expect(framingFor('dialogue', { characterCount: 0 })).toBe(shotFor('dialogue'));
+    expect(framingFor('narrative', { characterCount: 0 })).toBe(shotFor('narrative'));
+    expect(framingFor(null, { characterCount: 0 })).toBe(shotFor(null));
+  });
+
+  it('is case- and whitespace-insensitive on the sceneType', () => {
+    expect(framingFor('  Dialogue ', { characterCount: 1 })).toBe('a medium shot, waist-up');
+    expect(framingFor('ACTION', { characterCount: 2 })).toBe(
+      'a dynamic wide shot from a low angle',
+    );
+  });
+});
+
+describe('shotFor back-compat (1-arg form unchanged)', () => {
+  // framingFor must not perturb the legacy shotFor contract: the 1-arg form
+  // still returns exactly what it did before count/importance awareness existed.
+  it('returns byte-identical values for the 1-arg form', () => {
+    expect(shotFor('dialogue')).toBe('a medium two-shot');
+    expect(shotFor('action')).toBe('a dynamic wide shot from a low angle');
+    expect(shotFor('description')).toBe('a wide establishing shot');
+    expect(shotFor('transition')).toBe('a wide establishing shot');
+    expect(shotFor('narrative')).toBe('a medium-wide shot');
+    expect(shotFor(null)).toBe('a cinematic wide shot');
+    expect(shotFor('ambiguous')).toBe('a cinematic wide shot');
+  });
+});
+
+describe('buildScenePrompt framing by character count', () => {
+  it('frames a single-character dialogue beat as a waist-up medium (bigger face)', () => {
+    const { prompt } = buildScenePrompt({
+      scene: { ...fullScene, sceneType: 'dialogue' },
+      characters: [evie],
+      style: painterly,
+    });
+    expect(prompt).toContain('a medium shot, waist-up');
+    expect(prompt).not.toContain('a medium two-shot');
+  });
+
+  it('frames a two-character dialogue beat as a waist-up two-shot', () => {
+    const { prompt } = buildScenePrompt({
+      scene: { ...fullScene, sceneType: 'dialogue' },
+      characters: [evie, tom],
+      style: painterly,
+    });
+    expect(prompt).toContain('a waist-up two-shot');
+  });
+
+  it('widens a three-character dialogue beat to a wide group shot', () => {
+    const mara: CharacterForPrompt = { name: 'Mara', appearanceToken: null, profile: null };
+    const { prompt } = buildScenePrompt({
+      scene: { ...fullScene, sceneType: 'dialogue' },
+      characters: [evie, tom, mara],
+      style: painterly,
+    });
+    expect(prompt).toContain('a wide group shot');
+  });
+
+  it('keeps action wide/low-angle even with a single character', () => {
+    const { prompt } = buildScenePrompt({
+      scene: { ...fullScene, sceneType: 'action' },
+      characters: [evie],
+      style: painterly,
+    });
+    expect(prompt).toContain('a dynamic wide shot from a low angle');
+  });
+
+  it('keeps description as a wide establishing shot even with two characters', () => {
+    const { prompt } = buildScenePrompt({
+      scene: { ...fullScene, sceneType: 'description' },
+      characters: [evie, tom],
+      style: painterly,
+    });
+    expect(prompt).toContain('a wide establishing shot');
+  });
+
+  it('pulls a high-importance single-character beat tighter to a medium close-up', () => {
+    const { prompt } = buildScenePrompt({
+      scene: { ...fullScene, sceneType: 'dialogue' },
+      characters: [evie],
+      style: painterly,
+      importance: 5,
+    });
+    expect(prompt).toContain('a medium close-up');
+  });
+
+  it('uses shotFor framing when there are no characters in frame', () => {
+    const { prompt } = buildScenePrompt({
+      scene: { ...fullScene, sceneType: 'dialogue' },
+      characters: [],
+      style: painterly,
+    });
+    expect(prompt).toContain(shotFor('dialogue'));
+  });
+});
+
+describe('buildScenePrompt position hints for 2+ characters', () => {
+  const mara: CharacterForPrompt = {
+    name: 'Mara',
+    appearanceToken: null,
+    profile: profile({ age: 'old woman', hair: 'silver' }),
+  };
+
+  it('weaves left/right position phrases for two characters in array order', () => {
+    const { prompt } = buildScenePrompt({
+      scene: fullScene,
+      characters: [evie, tom],
+      style: painterly,
+    });
+    const evieAt = prompt.indexOf('Evie');
+    const tomAt = prompt.indexOf('Tom');
+    const leftAt = prompt.indexOf('on the left');
+    const rightAt = prompt.indexOf('on the right');
+    expect(leftAt).toBeGreaterThan(evieAt);
+    expect(leftAt).toBeLessThan(tomAt);
+    expect(rightAt).toBeGreaterThan(tomAt);
+  });
+
+  it('weaves left/center/right for three characters in array order', () => {
+    const { prompt } = buildScenePrompt({
+      scene: fullScene,
+      characters: [evie, tom, mara],
+      style: painterly,
+    });
+    const leftAt = prompt.indexOf('on the left');
+    const centerAt = prompt.indexOf('in the center');
+    const rightAt = prompt.indexOf('on the right');
+    expect(leftAt).toBeGreaterThanOrEqual(0);
+    expect(centerAt).toBeGreaterThan(leftAt);
+    expect(rightAt).toBeGreaterThan(centerAt);
+  });
+
+  it('adds no position phrase for a single character', () => {
+    const { prompt } = buildScenePrompt({
+      scene: fullScene,
+      characters: [evie],
+      style: painterly,
+    });
+    expect(prompt).not.toContain('on the left');
+    expect(prompt).not.toContain('on the right');
+    expect(prompt).not.toContain('in the center');
+  });
+
+  it('still preserves each appearance token substance verbatim with position hints', () => {
+    const { prompt } = buildScenePrompt({
+      scene: fullScene,
+      characters: [evie, tom],
+      style: painterly,
+    });
+    expect(prompt).toContain(
+      'young woman, slender build, lavender hair, hazel eyes, wearing a practical work dress, ink-stained fingers',
+    );
+    expect(prompt).toContain(
+      'weathered man, broad-shouldered build, cropped grey hair, grey eyes, wearing a travel-worn cloak, grey beard',
+    );
+  });
+
+  it('keeps the LoRA keyword adjacent to the right character alongside its position', () => {
+    const { prompt } = buildScenePrompt({
+      scene: fullScene,
+      characters: [{ ...evie, loraKeyword: 'kariiina' }, tom],
+      style: painterly,
+    });
+    // The keyword still leads Evie's clause; Tom never picks it up.
+    expect(prompt).toContain('kariiina Evie');
+    expect(prompt).not.toContain('kariiina Tom');
+    // Evie is on the left, Tom on the right (array order).
+    const evieAt = prompt.indexOf('kariiina Evie');
+    const leftAt = prompt.indexOf('on the left');
+    const tomAt = prompt.indexOf('Tom');
+    expect(leftAt).toBeGreaterThan(evieAt);
+    expect(leftAt).toBeLessThan(tomAt);
   });
 });
 
@@ -614,13 +856,14 @@ describe('LoRA keyword weaving (imaging)', () => {
         characters: [{ ...evie, loraKeyword: 'kariiina' }, tom],
         style: painterly,
       });
-      // Evie gets her keyword bound to her clause.
+      // Evie gets her keyword bound to her clause (with her left-position hint at
+      // 2 characters; the appearance substance is still verbatim).
       expect(prompt).toContain(
-        'kariiina Evie (young woman, slender build, lavender hair, hazel eyes, wearing a practical work dress, ink-stained fingers)',
+        'kariiina Evie (young woman, slender build, lavender hair, hazel eyes, wearing a practical work dress, ink-stained fingers, on the left)',
       );
-      // Tom (no keyword) is unchanged — no keyword leaks onto him.
+      // Tom (no keyword) is unchanged — no keyword leaks onto him; right position.
       expect(prompt).toContain(
-        'Tom (weathered man, broad-shouldered build, cropped grey hair, grey eyes, wearing a travel-worn cloak, grey beard)',
+        'Tom (weathered man, broad-shouldered build, cropped grey hair, grey eyes, wearing a travel-worn cloak, grey beard, on the right)',
       );
       expect(prompt).not.toContain('kariiina Tom');
     });
