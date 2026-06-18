@@ -59,6 +59,22 @@ describe('buildIllustrationPlanPrompt', () => {
     expect(prompt).toMatch(/dialogue/i);
   });
 
+  it('instructs the planner to describe concrete physical staging, not the topic', () => {
+    const { prompt } = buildIllustrationPlanPrompt(base);
+    expect(prompt).toMatch(/physical staging|staging/i);
+    // It must contrast the topic/abstract against the bodies/action.
+    expect(prompt).toMatch(/bodies|doing|spatial/i);
+  });
+
+  it('includes a weak-vs-strong few-shot example contrasting topic and staging', () => {
+    const { prompt } = buildIllustrationPlanPrompt(base);
+    // The canonical contrast pair from the design doc.
+    expect(prompt).toMatch(/weak/i);
+    expect(prompt).toMatch(/strong/i);
+    expect(prompt).toContain('confronts Evie about the letter');
+    expect(prompt).toContain('looms over the desk');
+  });
+
   it('fences the chapter text', () => {
     const { prompt } = buildIllustrationPlanPrompt(base);
     expect(prompt).toMatch(/```\n?Evie crept down the corridor[\s\S]*?```/);

@@ -158,6 +158,62 @@ export function shotFor(sceneType: string | null): string {
   }
 }
 
+/** Importance at/above which a 1–2 character beat is pulled tighter still. */
+const TIGHT_FRAMING_IMPORTANCE = 4;
+
+/**
+ * Picks the camera framing factoring **how many characters are in frame** (and
+ * **importance** when known), so emotional 1–2 character beats are framed
+ * tight enough that faces render large, while groups widen to fit everyone.
+ *
+ * A NEW function rather than overloading `shotFor`: `shotFor` keeps its simple,
+ * exported, byte-identical 1-arg contract (and its tests), and the count/
+ * importance logic — which only `buildScenePrompt` needs — lives in its own
+ * clearly-named place instead of being bolted onto the back-compat surface.
+ *
+ *  - `action` → keep the dynamic low-angle wide regardless of count (motion
+ *    reads better wide).
+ *  - `description`/`transition` → keep the wide establishing shot (scene-setting;
+ *    faces are not the point).
+ *  - `dialogue`/`narrative`/unknown:
+ *      - 0 characters → no one to frame tight; fall back to `shotFor`.
+ *      - 1–2 characters → tight (waist-up); importance ≥ 4 pulls to a close-up.
+ *      - 3+ characters → widen to a group shot (accept smaller faces).
+ *
+ * Pure and deterministic. Case- and whitespace-insensitive on `sceneType`.
+ */
+export function framingFor(
+  sceneType: string | null,
+  opts: { characterCount: number; importance?: number | null },
+): string {
+  const key = (sceneType ?? '').trim().toLowerCase();
+  const count = opts.characterCount;
+  const importance = opts.importance ?? null;
+
+  if (key === 'action') return 'a dynamic wide shot from a low angle';
+  if (key === 'description' || key === 'transition') return 'a wide establishing shot';
+
+  // dialogue / narrative / unknown, framed by who is in shot.
+  if (count <= 0) return shotFor(sceneType);
+  if (count >= 3) return 'a wide group shot';
+
+  const tight = importance !== null && importance >= TIGHT_FRAMING_IMPORTANCE;
+  if (count === 1) return tight ? 'a medium close-up' : 'a medium shot, waist-up';
+  // count === 2
+  return tight ? 'a medium close-up two-shot' : 'a waist-up two-shot';
+}
+
+/**
+ * Deterministic spatial position phrases woven into each character's clause
+ * when 2+ characters share a scene, so the model separates them left-to-right
+ * by their order in the cast array (an inexpensive grounding aid). A single
+ * character gets no phrase (nothing to position against).
+ */
+const POSITION_HINTS: Record<number, string[]> = {
+  2: ['on the left', 'on the right'],
+  3: ['on the left', 'in the center', 'on the right'],
+};
+
 /**
  * Appends a label noun ('hair', 'eyes', …) when the value doesn't already
  * name it, so single-word traits like 'dark' or 'lavender' read unambiguously
@@ -333,6 +389,12 @@ export function buildScenePrompt(args: {
    * byte-identical to omitting this flag.
    */
   mature?: boolean;
+  /**
+   * Planned LLM importance (1–5) of this moment, when known. Pulls a tight
+   * 1–2 character framing slightly tighter still. Absent → framing depends on
+   * count + sceneType only (byte-identical to omitting this flag).
+   */
+  importance?: number | null;
 }): { prompt: string; negative: string } {
   const { scene, style } = args;
 
@@ -347,9 +409,15 @@ export function buildScenePrompt(args: {
     ? sentence(`${normalizeFragment(scene.mood)} mood`)
     : null;
 
-  const cast = args.characters.slice(0, MAX_SCENE_CHARACTERS).map((c) => ({
+  const present = args.characters.slice(0, MAX_SCENE_CHARACTERS);
+  // Position phrases only when 2+ share the frame; null otherwise (1 char →
+  // byte-identical to the no-hint output). Indexed by cast-array order.
+  const positions = POSITION_HINTS[present.length] ?? null;
+  const cast = present.map((c, i) => ({
     name: normalizeFragment(c.name),
     description: capWords(renderCharacterDescription(c), MAX_SCENE_DESCRIPTION_WORDS),
+    // Spatial hint for THIS character (cast-array order); null when 1 char.
+    position: positions?.[i] ?? null,
     // Trigger keyword bound to THIS character; '' when none.
     keyword: keywordOf(c),
   }));
@@ -361,9 +429,16 @@ export function buildScenePrompt(args: {
       // them even when the description is dropped under length pressure (never
       // orphaned). No keyword → byte-identical to the prior clause.
       const head = c.keyword ? `${c.keyword} ${c.name}` : c.name;
-      return withDescriptions && c.description && c.description !== c.name
-        ? `${head} (${c.description})`
-        : head;
+      const hasTraits = c.description && c.description !== c.name;
+      if (withDescriptions && hasTraits) {
+        // Position hint weaves into the parenthetical after the verbatim
+        // appearance, so it drops with the description under length pressure.
+        const inner = c.position ? `${c.description}, ${c.position}` : c.description;
+        return `${head} (${inner})`;
+      }
+      // No traits to show (name-only, or descriptions dropped): keep the
+      // position hint attached to the name so 2+ characters still separate.
+      return withDescriptions && c.position ? `${head}, ${c.position}` : head;
     });
     const list =
       rendered.length === 1
@@ -379,7 +454,14 @@ export function buildScenePrompt(args: {
     lighting,
     mood,
     fidelity: args.mature ? IMAGING_FIDELITY_INSTRUCTION : null,
-    shot: sentence(`Composed as ${shotFor(scene.sceneType)}`),
+    // Framing factors how many characters are in frame (+ importance), so 1–2
+    // character beats are tight enough for large faces and groups widen to fit.
+    shot: sentence(
+      `Composed as ${framingFor(scene.sceneType, {
+        characterCount: present.length,
+        importance: args.importance,
+      })}`,
+    ),
     style: sentence(`Rendered as ${normalizeFragment(style.promptFragment)}`),
     technical: TECHNICAL_CLAUSE,
   };
