@@ -78,6 +78,18 @@ const SYSTEMIC_OLLAMA_CODES = new Set(['NETWORK', 'TIMEOUT', 'MODEL_NOT_FOUND'])
 /** Phase 0 owns the first slice of the progress bar; Phase 1 the remainder. */
 const PLANNING_PERCENT_END = 25;
 
+/**
+ * Within Phase 0, chapter planning owns 0..PLANNING_PERCENT_PLAN and the
+ * per-scene wardrobe-state assignment pass owns
+ * PLANNING_PERCENT_PLAN..PLANNING_PERCENT_END, so the (potentially long)
+ * assignment pass advances the progress bar + updated_at instead of looking
+ * frozen at the chapter-planning end.
+ */
+const PLANNING_PERCENT_PLAN = 20;
+
+/** Emit a wardrobe-assignment progress line / report every N points. */
+const WARDROBE_PROGRESS_EVERY = 10;
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** Style preset used when the book doesn't pin one. */
@@ -863,6 +875,7 @@ async function loadStateDescriptors(db: Db, bookId: string): Promise<Map<string,
 async function assignWardrobeStates(args: {
   db: Db;
   bookId: string;
+  runId: string;
   book: { userId: string };
   points: Array<{
     id: string;
@@ -874,7 +887,7 @@ async function assignWardrobeStates(args: {
   scenesByChapter: Map<string, SceneRow[]>;
   log: (m: string) => void;
 }): Promise<{ tokensIn: number; tokensOut: number; calls: number }> {
-  const { db, bookId, book, points, scenesByChapter, log } = args;
+  const { db, bookId, runId, book, points, scenesByChapter, log } = args;
 
   const statesByChar = await loadCharacterStates(db, bookId);
   if (statesByChar.size === 0) {
@@ -908,7 +921,19 @@ async function assignWardrobeStates(args: {
     return picks;
   };
 
+  const total = points.length;
+  const reportAssignProgress = async (processed: number): Promise<void> => {
+    log(`Assigning wardrobe states (${processed}/${total} points)`);
+    const span = PLANNING_PERCENT_END - PLANNING_PERCENT_PLAN;
+    await reportProgress(runId, {
+      stage: 'imagine',
+      percent: PLANNING_PERCENT_PLAN + (processed / Math.max(1, total)) * span,
+      currentStep: `Assigning wardrobe states (${processed}/${total})`,
+    });
+  };
+
   let assigned = 0;
+  let processed = 0;
   for (const point of points) {
     const present = point.presentCharacterIds
       .map((id) => statesByChar.get(id))
@@ -945,6 +970,24 @@ async function assignWardrobeStates(args: {
           redactSecrets(err instanceof Error ? err.message : String(err)),
       );
     }
+
+    // Periodic observability: advance the progress bar + updated_at every N
+    // points so a long assignment pass never looks hung. A reporting failure
+    // must never sink the pass, so it is best-effort.
+    processed += 1;
+    if (processed % WARDROBE_PROGRESS_EVERY === 0 && processed < total) {
+      try {
+        await reportAssignProgress(processed);
+      } catch {
+        // ignore — progress reporting is observability only.
+      }
+    }
+  }
+
+  try {
+    await reportAssignProgress(total);
+  } catch {
+    // ignore — final report is observability only.
   }
 
   log(
@@ -1141,7 +1184,7 @@ async function planIllustrationPoints(args: {
   for (const chapter of chapterRows) {
     await reportProgress(runId, {
       stage: 'imagine',
-      percent: (chapterIndex / Math.max(1, total)) * PLANNING_PERCENT_END,
+      percent: (chapterIndex / Math.max(1, total)) * PLANNING_PERCENT_PLAN,
       currentStep: `Planning illustrations (ch ${chapterIndex + 1}/${total})`,
     });
     chapterIndex++;
@@ -1250,6 +1293,7 @@ async function planIllustrationPoints(args: {
       const usage = await assignWardrobeStates({
         db,
         bookId,
+        runId,
         book,
         points: persistedPoints,
         scenesByChapter,

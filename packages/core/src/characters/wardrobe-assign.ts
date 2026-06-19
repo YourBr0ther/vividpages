@@ -25,6 +25,31 @@ import {
   partitionForAssignment,
   type CharacterStates,
 } from './state-assign';
+import { CLOTHING_NOUNS } from './wardrobe';
+
+/**
+ * Extra wardrobe-change cues beyond the garment nouns in CLOTHING_NOUNS: verbs
+ * and bare-body words that signal an outfit change or a non-base state even
+ * when no specific garment is named ("she undressed", "he was naked").
+ */
+const OUTFIT_CUE =
+  /\b(dressed|undressed|undressing|wearing|changed|naked|nude|bare|bath|robe|gown|armor|armour|uniform|cloak|stripped|stripping|disrob)\b/i;
+
+/**
+ * Pure predicate: does this moment's text carry an outfit / clothing-change
+ * cue worth asking the wardrobe LLM about? True when the text mentions a
+ * garment noun (CLOTHING_NOUNS) or an outfit-change verb / bare-body word
+ * (OUTFIT_CUE). When FALSE, the orchestrator skips the LLM call entirely and
+ * defaults every multi-state character to base (the design's "default base
+ * when unsignaled"): the vast majority of moments name no wardrobe at all, so
+ * this cuts the large majority of LLM calls without changing the result for
+ * those moments (base would dominate anyway). Pure: identical text -> identical
+ * boolean.
+ */
+export function momentSuggestsOutfit(momentText: string): boolean {
+  if (!momentText) return false;
+  return CLOTHING_NOUNS.test(momentText) || OUTFIT_CUE.test(momentText);
+}
 
 /** Scene context woven into the assignment prompt (borrowed from the scene). */
 export interface AssignSceneContext {
@@ -152,12 +177,18 @@ export async function pickStatesWithLlm(
  * (characterId -> chosen state id) ready to persist. Composition:
  *   1. partition present characters: single-state -> forced base (no call),
  *      multi-state -> needs an LLM pick. No-state characters are dropped.
- *   2. if any need a pick, call the picker ONCE (per-character hard enum).
+ *   2. call the picker ONCE (per-character hard enum) ONLY when a multi-state
+ *      character is present AND the moment text carries a wardrobe cue
+ *      (momentSuggestsOutfit). When the moment names no outfit, skip the LLM
+ *      and pass empty picks so the merger defaults every multi-state character
+ *      to base — the same map shape an all-base LLM result would produce.
  *   3. merge: picks validated against each character's ids, default-to-base on
  *      any miss/failure; single-state characters folded in as base.
  *
- * `picker` defaults to the no-op when no character needs it (no LLM call). Pure
- * orchestration over the injected picker so it is unit-testable with a stub.
+ * The skip path is pure-deterministic and makes NO LLM call; the result map is
+ * identical in shape (characterId -> base stateId) to an all-base pick, so
+ * downstream is unaffected. Pure orchestration over the injected picker so it
+ * is unit-testable with a stub.
  */
 export async function assignPointStates(
   momentDescription: string,
@@ -166,7 +197,8 @@ export async function assignPointStates(
   picker: StatePicker,
 ): Promise<Record<string, string>> {
   const { needLlm } = partitionForAssignment(charactersWithStates);
-  const picks = needLlm.length > 0 ? await picker(momentDescription, scene, needLlm) : {};
+  const shouldAsk = needLlm.length > 0 && momentSuggestsOutfit(momentDescription);
+  const picks = shouldAsk ? await picker(momentDescription, scene, needLlm) : {};
   return mergeStateAssignments(charactersWithStates, picks);
 }
 

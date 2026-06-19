@@ -4,6 +4,7 @@ import {
   assignPointStates,
   buildAssignmentPrompt,
   buildAssignmentSchema,
+  momentSuggestsOutfit,
   type AssignSceneContext,
 } from '../src/characters/wardrobe-assign';
 import type { CharacterStates } from '../src/characters/state-assign';
@@ -24,6 +25,56 @@ const solo: CharacterStates = {
   states: [{ id: 's-solo-base', type: 'base', descriptor: 'leather coat', isBase: true }],
 };
 const ghost: CharacterStates = { characterId: 'c-ghost', name: 'Ghost', states: [] };
+
+describe('momentSuggestsOutfit', () => {
+  it('returns true when the moment text carries a clothing/outfit-change cue', () => {
+    expect(momentSuggestsOutfit('she changed into a gown')).toBe(true);
+    expect(momentSuggestsOutfit('the knight stood wearing armor')).toBe(true);
+    expect(momentSuggestsOutfit('he was naked by the river')).toBe(true);
+    expect(momentSuggestsOutfit('she slipped into a silk robe')).toBe(true);
+    expect(momentSuggestsOutfit('they stripped off their uniforms')).toBe(true);
+  });
+
+  it('returns false when the moment text has no wardrobe cue', () => {
+    expect(momentSuggestsOutfit('she walked into the office')).toBe(false);
+    expect(momentSuggestsOutfit('they argued about the plan')).toBe(false);
+    expect(momentSuggestsOutfit('he stared out across the valley')).toBe(false);
+  });
+
+  it('is robust to empty / whitespace input', () => {
+    expect(momentSuggestsOutfit('')).toBe(false);
+    expect(momentSuggestsOutfit('   ')).toBe(false);
+  });
+});
+
+describe('assignPointStates skip path (no wardrobe cue)', () => {
+  it('skips the LLM picker and defaults every multi-state character to base when the moment has no cue', async () => {
+    const picker = vi.fn();
+    const result = await assignPointStates(
+      'Evie walked into the office beside Solo.',
+      SCENE,
+      [evie, solo, ghost],
+      picker,
+    );
+    // No cue -> picker MUST NOT be called.
+    expect(picker).not.toHaveBeenCalled();
+    // Same shape the merger would produce for an all-base result: multi-state
+    // Evie defaults to base, single-state Solo to base, Ghost omitted.
+    expect(result).toEqual({ 'c-evie': 's-base', 'c-solo': 's-solo-base' });
+  });
+
+  it('still calls the picker for a multi-state character when the moment HAS a cue', async () => {
+    const picker = vi.fn(async () => ({ 'c-evie': 's-gown' }));
+    const result = await assignPointStates(
+      'Evie changed into a red ballgown.',
+      SCENE,
+      [evie, solo, ghost],
+      picker,
+    );
+    expect(picker).toHaveBeenCalledOnce();
+    expect(result).toEqual({ 'c-evie': 's-gown', 'c-solo': 's-solo-base' });
+  });
+});
 
 describe('buildAssignmentSchema', () => {
   it('constrains each character to its own state ids and rejects cross picks', () => {

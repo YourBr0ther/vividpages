@@ -196,7 +196,7 @@ export function stripTransientStates(signal: string): string | null {
 }
 
 /** Clothing/garment nouns used to decide whether a clause is wearable. */
-const CLOTHING_NOUNS =
+export const CLOTHING_NOUNS =
   /\b(shirt|blouse|tunic|dress|gown|robe|cloak|coat|jacket|cape|vest|waistcoat|trousers|pants|breeches|skirt|leggings|boots?|shoes?|gloves?|hat|cap|hood|scarf|belt|armor|armour|uniform|suit|outfit|attire|clothes|clothing|garb|garment|sweater|cardigan|sash|apron|smock|frock|kimono|sari|toga|doublet|jerkin|tabard|mantle|shawl|veil|corset|bodice|petticoat|nightgown|pajamas|pyjamas|overalls|jumpsuit|kilt|poncho|parka|anorak|blazer|tuxedo|jeans|shorts|t-shirt|tshirt|hoodie|sweatshirt|stockings|tights|sandals?|slippers|heels|crown|tiara|helmet|helm|breastplate|chainmail|chestplate|wear|wearing|clad|dressed)\b/i;
 
 function hasClothingNoun(clause: string): boolean {
