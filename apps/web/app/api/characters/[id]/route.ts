@@ -26,6 +26,12 @@ const patchSchema = z
       .transform((v) =>
         v === null ? null : Math.min(MAX_LORA_STRENGTH, Math.max(0, v)),
       ),
+    /**
+     * Minor "upgrade to full wardrobe" toggle (Phase 2, chunk 6). Persisting the
+     * flag is the whole job — the wardrobe data populates on the next pipeline
+     * run; there is no live per-character regeneration here.
+     */
+    wardrobeUpgraded: z.boolean(),
   })
   .partial();
 
@@ -88,6 +94,7 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
   if ('loraName' in parsed.data) patch.loraName = parsed.data.loraName;
   if ('loraKeyword' in parsed.data) patch.loraKeyword = parsed.data.loraKeyword;
   if ('loraStrength' in parsed.data) patch.loraStrength = parsed.data.loraStrength;
+  if ('wardrobeUpgraded' in parsed.data) patch.wardrobeUpgraded = parsed.data.wardrobeUpgraded;
 
   const [updated] = await getDb()
     .update(characters)
@@ -99,6 +106,7 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
       loraName: characters.loraName,
       loraKeyword: characters.loraKeyword,
       loraStrength: characters.loraStrength,
+      wardrobeUpgraded: characters.wardrobeUpgraded,
     });
 
   return NextResponse.json({ character: updated });
