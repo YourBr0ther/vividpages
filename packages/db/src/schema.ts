@@ -34,7 +34,17 @@ export type BookStatus =
   | 'ready'
   | 'failed';
 export type SceneAnalysisStatus = 'pending' | 'done' | 'failed';
-export type ImageKind = 'character_portrait' | 'scene_storyboard' | 'book_cover';
+export type ImageKind =
+  | 'character_portrait'
+  | 'scene_storyboard'
+  | 'book_cover'
+  /**
+   * Per-appearance-state reference render (wardrobe Phase 2): a studio portrait
+   * of a character's body model wearing one wardrobe state's outfit. `subjectId`
+   * is the `character_appearance_states.id`; the resulting object keys are also
+   * written back onto that state row.
+   */
+  | 'appearance_state';
 export type ImageStatus = 'pending' | 'generating' | 'done' | 'failed';
 export type PipelineRunStatus = 'running' | 'done' | 'failed';
 export type ApiKeyProvider = 'anthropic' | 'openai';

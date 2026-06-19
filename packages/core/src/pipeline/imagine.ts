@@ -116,6 +116,15 @@ interface WorkItem {
   loras: ResolvedLora[];
   /** Human-readable progress label ('Painting Evie (3/12)'). */
   step: string;
+  /**
+   * Optional side-effect run after a successful generate+store+images-insert,
+   * with the object keys just written. Used by appearance-state reference renders
+   * to mirror the keys onto the `character_appearance_states` row (so the cast
+   * page can show the outfit model and a retried run resume-skips by that key).
+   * Best-effort: a failure here is logged but does NOT fail the item (the
+   * `images` row already succeeded and is the render's source of truth).
+   */
+  onStored?: (keys: { objectKey: string; thumbObjectKey: string }) => Promise<void>;
 }
 
 /**
@@ -174,6 +183,176 @@ async function loadPortraitCharacters(db: Db, bookId: string): Promise<PortraitC
       loraKeyword: r.loraKeyword,
       loraStrength: r.loraStrength,
     }));
+}
+
+/**
+ * Roles that, regardless of the wardrobe-upgrade flag, get per-state reference
+ * renders. Mains always do; minors only when `wardrobeUpgraded` is set (the
+ * "upgrade to full wardrobe" toggle). Mirrors the eligibility in Section 4.
+ */
+const STATE_REFERENCE_ROLES = new Set(['main']);
+
+/**
+ * State types that get a reference render in Phase 2. Underwear/nude states are
+ * Phase 4 and are deliberately excluded here (Phase 2 has no mature states).
+ */
+const STATE_REFERENCE_TYPES = new Set(['base', 'additional']);
+
+/** One appearance state as needed to build its reference-render work item. */
+interface AppearanceStateForRef {
+  id: string;
+  type: string;
+  descriptor: string;
+  /** Set once the reference image exists → resume-skip signal. */
+  imageObjectKey: string | null;
+}
+
+/**
+ * A character that may receive per-state reference renders, with the fields the
+ * portrait prompt needs (body model is the immutable anchor; the per-state
+ * outfit descriptor is woven on top via `buildPortraitPrompt`'s chunk-4 path).
+ */
+export interface StateRefCharacter extends CharacterForPrompt, CharacterLora {
+  id: string;
+  role: string | null;
+  wardrobeUpgraded: boolean;
+  states: AppearanceStateForRef[];
+}
+
+/**
+ * One planned per-state reference render: the body model + a single wardrobe
+ * state's outfit, destined for `buildPortraitPrompt` and stored back on the
+ * state row. Carries the character's prompt + LoRA fields so the work item is
+ * built without a second DB read.
+ */
+export interface StateReferenceItem {
+  stateId: string;
+  characterId: string;
+  name: string;
+  appearanceToken: string | null;
+  profile: CharacterProfile | null;
+  loraKeyword: string | null;
+  loraName: string | null;
+  loraStrength: number | null;
+  bodyModel: string | null;
+  /** The state's clothing descriptor, woven onto the body model. */
+  outfit: string;
+  /** Next version to render for this state (max existing + 1). */
+  version: number;
+}
+
+/**
+ * Builds the per-appearance-state reference-render work list (pure, no IO —
+ * unit-tested). For each eligible character (role 'main' OR `wardrobeUpgraded`)
+ * and each of its `base`/`additional` states (underwear/nude are Phase 4 and
+ * excluded), emits one render item carrying the body model + that state's
+ * outfit. States that already have an `imageObjectKey` are resume-skipped
+ * (idempotent across retried runs). Order follows the input character order,
+ * then the character's state order. `maxVersionFor(stateId)` returns the highest
+ * existing version for a state (0 when none); the item's version is that + 1.
+ */
+export function planStateReferenceItems(
+  characters: StateRefCharacter[],
+  maxVersionFor: (stateId: string) => number,
+): StateReferenceItem[] {
+  const items: StateReferenceItem[] = [];
+  for (const c of characters) {
+    const eligible =
+      (c.role !== null && STATE_REFERENCE_ROLES.has(c.role)) || c.wardrobeUpgraded;
+    if (!eligible) continue;
+    for (const state of c.states) {
+      if (!STATE_REFERENCE_TYPES.has(state.type)) continue;
+      if (state.imageObjectKey) continue; // already generated — resume-skip
+      items.push({
+        stateId: state.id,
+        characterId: c.id,
+        name: c.name,
+        appearanceToken: c.appearanceToken,
+        profile: c.profile,
+        loraKeyword: c.loraKeyword ?? null,
+        loraName: c.loraName,
+        loraStrength: c.loraStrength,
+        bodyModel: c.bodyModel ?? null,
+        outfit: state.descriptor,
+        version: maxVersionFor(state.id) + 1,
+      });
+    }
+  }
+  return items;
+}
+
+/**
+ * Loads every character that may receive per-state reference renders (role
+ * 'main' or `wardrobeUpgraded`), each joined with its base/additional appearance
+ * states. Characters are most-seen first (stable order); states are base-first
+ * then by sceneMentions (the same stable ordering used elsewhere). The pure
+ * `planStateReferenceItems` applies the eligibility + state-type filters and the
+ * resume-skip — this loader just gathers the rows.
+ */
+async function loadStateReferenceCharacters(
+  db: Db,
+  bookId: string,
+): Promise<StateRefCharacter[]> {
+  const charRows = await db
+    .select({
+      id: characters.id,
+      name: characters.name,
+      role: characters.role,
+      wardrobeUpgraded: characters.wardrobeUpgraded,
+      profile: characters.profile,
+      appearanceToken: characters.appearanceToken,
+      bodyModel: characters.bodyModel,
+      loraName: characters.loraName,
+      loraKeyword: characters.loraKeyword,
+      loraStrength: characters.loraStrength,
+    })
+    .from(characters)
+    .where(and(eq(characters.bookId, bookId), isNotNull(characters.appearanceToken)))
+    .orderBy(desc(characters.sceneCount), asc(characters.createdAt));
+
+  const charIds = charRows.map((c) => c.id);
+  const statesByChar = new Map<string, AppearanceStateForRef[]>();
+  if (charIds.length > 0) {
+    const stateRows = await db
+      .select({
+        id: characterAppearanceStates.id,
+        characterId: characterAppearanceStates.characterId,
+        type: characterAppearanceStates.type,
+        descriptor: characterAppearanceStates.descriptor,
+        imageObjectKey: characterAppearanceStates.imageObjectKey,
+      })
+      .from(characterAppearanceStates)
+      .where(inArray(characterAppearanceStates.characterId, charIds))
+      .orderBy(
+        asc(characterAppearanceStates.characterId),
+        desc(characterAppearanceStates.isBase),
+        desc(characterAppearanceStates.sceneMentions),
+      );
+    for (const s of stateRows) {
+      const list = statesByChar.get(s.characterId) ?? [];
+      list.push({
+        id: s.id,
+        type: s.type,
+        descriptor: s.descriptor,
+        imageObjectKey: s.imageObjectKey,
+      });
+      statesByChar.set(s.characterId, list);
+    }
+  }
+
+  return charRows.map((c) => ({
+    id: c.id,
+    name: c.name,
+    role: c.role,
+    wardrobeUpgraded: c.wardrobeUpgraded,
+    profile: sanitizedProfile(c.profile),
+    appearanceToken: c.appearanceToken,
+    bodyModel: c.bodyModel,
+    loraName: c.loraName,
+    loraKeyword: c.loraKeyword,
+    loraStrength: c.loraStrength,
+    states: statesByChar.get(c.id) ?? [],
+  }));
 }
 
 interface SceneRow {
@@ -1185,6 +1364,19 @@ async function processWorkItem(item: WorkItem, ctx: WorkItemContext): Promise<Ou
       status: 'done',
       version: item.version,
     });
+    // Mirror the stored keys onto a related row when requested (appearance-state
+    // reference renders write back to character_appearance_states). The images
+    // row already committed, so a mirror failure is logged, not fatal.
+    if (item.onStored) {
+      try {
+        await item.onStored({ objectKey, thumbObjectKey });
+      } catch (mirrorErr) {
+        log(
+          `${item.kind} ${item.subjectId} v${item.version} stored, but mirroring keys failed: ` +
+            redactSecrets(mirrorErr instanceof Error ? mirrorErr.message : String(mirrorErr)),
+        );
+      }
+    }
     log(
       `${item.kind} ${item.subjectId} v${item.version} done ` +
         `(seed ${result.seed}, ${result.durationMs}ms)`,
@@ -1345,6 +1537,9 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
     (existing.maxVersion.get(subjectKey(kind, subjectId)) ?? 0) + 1;
 
   const portraitChars = await loadPortraitCharacters(db, bookId);
+  // Per-state reference renders (wardrobe Phase 2). Loaded in full-run mode only
+  // — only-mode regenerates a single subject and never touches state references.
+  const stateRefChars = only ? [] : await loadStateReferenceCharacters(db, bookId);
   const sceneRows = await loadAnalyzedScenes(db, bookId);
   const pointRows = await loadIllustrationPoints(db, bookId);
   // stateId → outfit descriptor (chunk 4): resolves a point's per-character
@@ -1375,6 +1570,60 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
       negative,
       loras: lora ? [lora] : [],
       step,
+    };
+  };
+
+  // A per-appearance-state reference render (wardrobe Phase 2): the SAME neutral
+  // studio portrait as today, but composing the character's immutable body model
+  // with this state's outfit ("{bodyModel}, wearing {outfit}") via the chunk-4
+  // path in buildPortraitPrompt. `subjectId` is the state id, so this never
+  // collides with the character's existing single character_portrait.
+  //
+  // Relationship to the existing single portrait (decision): we KEEP BOTH and do
+  // NOT repurpose either. The existing character_portrait (keyed by characterId,
+  // appearance-token/profile path) is untouched — so characters WITHOUT wardrobe
+  // states keep exactly today's single portrait, and eligible characters get
+  // these per-state references ADDITIVELY. This is the least-surprising option:
+  // no change to existing portrait behavior, and the cast page (chunk 6) reads
+  // outfit models straight off the state rows' imageObjectKey/thumbObjectKey.
+  const stateRefItem = (ref: StateReferenceItem, step: string): WorkItem => {
+    const { prompt, negative } = buildPortraitPrompt({
+      character: {
+        name: ref.name,
+        appearanceToken: ref.appearanceToken,
+        profile: ref.profile,
+        loraKeyword: ref.loraKeyword,
+        // chunk-4 composition: body model (verbatim) + this state's outfit. With
+        // both present it renders "{bodyModel}, wearing {outfit}"; absent either
+        // it falls back to the profile/appearance-token path byte-identically.
+        bodyModel: ref.bodyModel,
+        outfit: ref.outfit,
+      },
+      style: styleFragment,
+      // No underwear/nude states exist in Phase 2, so this honors `mature` the
+      // same as the portrait path without generating anything explicit.
+      mature: book.matureContent,
+    });
+    const lora = resolveCharacterLora(ref);
+    return {
+      kind: 'appearance_state',
+      subjectId: ref.stateId,
+      version: ref.version,
+      width: PORTRAIT_WIDTH,
+      height: PORTRAIT_HEIGHT,
+      prompt,
+      negative,
+      loras: lora ? [lora] : [],
+      step,
+      // Mirror the stored keys onto the state row so the cast page shows this
+      // outfit model and a retried run resume-skips this state (it now has an
+      // imageObjectKey). The images row is the render's source of truth.
+      onStored: async ({ objectKey, thumbObjectKey }) => {
+        await db
+          .update(characterAppearanceStates)
+          .set({ imageObjectKey: objectKey, thumbObjectKey })
+          .where(eq(characterAppearanceStates.id, ref.stateId));
+      },
     };
   };
 
@@ -1481,6 +1730,16 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
     const portraits = portraitChars
       .filter((c) => !existing.done.has(subjectKey('character_portrait', c.id)))
       .map((c, i, arr) => portraitItem(c, `Painting ${c.name} (${i + 1}/${arr.length})`));
+    // Per-state reference renders run with the portraits (they ARE per-outfit
+    // portraits) and BEFORE scene art. The pure planner applies eligibility
+    // (mains + upgraded), the base/additional filter, and the resume-skip (a
+    // state already carrying an imageObjectKey is dropped), keying the next
+    // version off existing appearance_state images for that state id.
+    const stateRefs = planStateReferenceItems(stateRefChars, (stateId) =>
+      existing.maxVersion.get(subjectKey('appearance_state', stateId)) ?? 0,
+    ).map((ref, i, arr) =>
+      stateRefItem(ref, `Rendering ${ref.name} (${ref.outfit}) (${i + 1}/${arr.length})`),
+    );
     const storyboardPoints = pointRows.filter(
       (p) => !existing.done.has(subjectKey('scene_storyboard', p.id)),
     );
@@ -1492,11 +1751,12 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
         await storyboardItem(point, `Illustrating moment ${moment}/${storyboardPoints.length}`),
       );
     }
-    plan = [...portraits, ...storyboards];
+    plan = [...portraits, ...stateRefs, ...storyboards];
   }
 
   log(
     `plan: ${plan.filter((i) => i.kind === 'character_portrait').length} portraits + ` +
+      `${plan.filter((i) => i.kind === 'appearance_state').length} state refs + ` +
       `${plan.filter((i) => i.kind === 'scene_storyboard').length} storyboards` +
       (only ? ' (only-mode)' : ''),
   );
