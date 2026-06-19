@@ -100,7 +100,12 @@ export function buildProfilePrompt(args: ProfilePromptArgs): { system: string; p
     '- attire: the typical/default outfit, not one-scene costumes.',
     '- distinguishing: PERMANENT identifying features only — scars that last, tattoos, props always carried. EXCLUDE temporary states: fresh injuries, blood, dirt, bruises, wet clothes, one-scene accessories.',
     "- role: 'main' (a central or recurring character the reader follows) or 'minor' (appears in only a scene or two). The scene-appearance count above is the strongest hint.",
-    '- oneLine: a compact, stable visual identity line (max 140 characters) for use in image prompts — no temporary injuries or states, e.g. "young woman with lavender hair and ink-stained fingers in a practical work dress".',
+    // NB: keep this a SLOT TEMPLATE, never a concrete example. A concrete
+    // example (e.g. a specific hair colour + outfit) gets copied verbatim by
+    // the small local model for any under-described character, contaminating
+    // unrelated books (the "everyone has lavender hair" bug). Placeholders force
+    // the model to fill from the text instead.
+    '- oneLine: a compact, stable visual identity line (max 140 characters) for image prompts — no temporary injuries or states. Use ONLY this character\'s own traits; never borrow from other characters or invent any. Shape it like "<age> <build> person with <hair> hair and <distinguishing feature>, wearing <attire>", filling each slot from the text and dropping slots the text never describes. Never output the placeholder words themselves.',
   ].join('\n');
 
   return { system, prompt };

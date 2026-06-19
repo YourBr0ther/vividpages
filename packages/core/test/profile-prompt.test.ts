@@ -87,6 +87,16 @@ describe('buildProfilePrompt', () => {
     }
   });
 
+  it('gives oneLine as a slot template, not a copyable concrete example', () => {
+    const { prompt } = buildProfilePrompt(baseArgs);
+    // Placeholders force the model to fill from the text...
+    expect(prompt).toContain('<hair> hair');
+    expect(prompt).toContain('Never output the placeholder words');
+    // ...and the old concrete example that leaked "lavender hair + work dress"
+    // onto under-described characters across books must be gone.
+    expect(prompt).not.toContain('lavender hair and ink-stained fingers');
+  });
+
   it('restricts distinguishing features to permanent traits', () => {
     const { prompt } = buildProfilePrompt(baseArgs);
     expect(prompt).toMatch(/permanent/i);
