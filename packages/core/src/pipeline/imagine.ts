@@ -9,6 +9,7 @@ import {
 import {
   books,
   chapters,
+  characterAppearanceStates,
   characters,
   getDb,
   illustrationPoints,
@@ -24,6 +25,13 @@ import sharp from 'sharp';
 
 import { characterProfileSchema, type CharacterProfile } from '../analysis/profile-schema';
 import { APPEARANCE_FIELD_ORDER, sanitizeTraitValue } from '../characters/appearance';
+import type { CharacterStates } from '../characters/state-assign';
+import {
+  assignPointStates,
+  persistPointStates,
+  pickStatesWithLlm,
+  type AssignSceneContext,
+} from '../characters/wardrobe-assign';
 import { imagesPerChapter } from '../illustration/count';
 import { isNonNarrative } from '../illustration/exclude';
 import { planChapterIllustrations, type PlanRosterMember } from '../illustration/plan';
@@ -38,7 +46,7 @@ import { redactSecrets } from '../redact';
 import { deleteObject, putObject } from '../storage';
 import { getEnv } from '../env';
 import { runWithConcurrency, type Outcome } from './concurrency';
-import { resolveImageGen, resolveLlm } from './llm';
+import { resolveImageGen, resolveLlm, resolveWardrobeLlm } from './llm';
 import {
   completeRun,
   incrementRunTokens,
@@ -572,6 +580,160 @@ async function loadRoster(db: Db, bookId: string): Promise<PlanRosterMember[]> {
   }));
 }
 
+/**
+ * Loads every character's appearance states for the book, keyed by characterId
+ * with the character's name attached (for the assignment prompt). States are in
+ * a stable order (base first, then by sceneMentions desc) so the per-character
+ * enum + default base resolve deterministically. Characters with no states are
+ * absent from the map (they trivially get base / are omitted downstream).
+ */
+async function loadCharacterStates(db: Db, bookId: string): Promise<Map<string, CharacterStates>> {
+  const rows = await db
+    .select({
+      id: characterAppearanceStates.id,
+      characterId: characterAppearanceStates.characterId,
+      type: characterAppearanceStates.type,
+      descriptor: characterAppearanceStates.descriptor,
+      isBase: characterAppearanceStates.isBase,
+      sceneMentions: characterAppearanceStates.sceneMentions,
+      name: characters.name,
+    })
+    .from(characterAppearanceStates)
+    .innerJoin(characters, eq(characters.id, characterAppearanceStates.characterId))
+    .where(eq(characters.bookId, bookId))
+    .orderBy(
+      asc(characterAppearanceStates.characterId),
+      desc(characterAppearanceStates.isBase),
+      desc(characterAppearanceStates.sceneMentions),
+    );
+
+  const byChar = new Map<string, CharacterStates>();
+  for (const r of rows) {
+    const entry = byChar.get(r.characterId) ?? {
+      characterId: r.characterId,
+      name: r.name,
+      states: [],
+    };
+    entry.states.push({
+      id: r.id,
+      type: r.type,
+      descriptor: r.descriptor,
+      isBase: r.isBase,
+    });
+    byChar.set(r.characterId, entry);
+  }
+  return byChar;
+}
+
+/**
+ * Per-scene wardrobe-state assignment (Phase 2, chunk 3). For every illustration
+ * point just planned, decides which appearance state each present character is
+ * in and writes `illustration_points.characterStates` (characterId -> state id).
+ *
+ * The reliable mechanism (per the spike) is a HARD per-character `z.enum` on the
+ * 14b wardrobe model, defaulting to each character's base. Call volume: ONE LLM
+ * call per point that has >=1 present character with multiple states; points
+ * whose present characters all have zero/one state need NO call. Idempotent: the
+ * map is overwritten per point on every run.
+ *
+ * Failure isolation: a single point's assignment failure logs and defaults that
+ * point to base (the merger's backstop with empty picks); it never sinks the
+ * planning stage. The assignment LLM is the wardrobe 14b model (resolveWardrobeLlm),
+ * independent of the planner's LLM.
+ */
+async function assignWardrobeStates(args: {
+  db: Db;
+  bookId: string;
+  book: { userId: string };
+  points: Array<{
+    id: string;
+    chapterId: string;
+    charOffset: number;
+    momentDescription: string;
+    presentCharacterIds: string[];
+  }>;
+  scenesByChapter: Map<string, SceneRow[]>;
+  log: (m: string) => void;
+}): Promise<{ tokensIn: number; tokensOut: number; calls: number }> {
+  const { db, bookId, book, points, scenesByChapter, log } = args;
+
+  const statesByChar = await loadCharacterStates(db, bookId);
+  if (statesByChar.size === 0) {
+    log('wardrobe assignment: no character appearance states — skipped');
+    return { tokensIn: 0, tokensOut: 0, calls: 0 };
+  }
+
+  // The picker is the 14b wardrobe model; resolve it once and reuse the LLM.
+  // Resolved lazily inside the picker so a book with zero multi-state points
+  // never constructs an LLM. The resolved LLM is memoized for the whole pass.
+  let llm: Awaited<ReturnType<typeof resolveWardrobeLlm>> | undefined;
+  let totalIn = 0;
+  let totalOut = 0;
+  let calls = 0;
+
+  const picker = async (
+    momentDescription: string,
+    scene: AssignSceneContext,
+    needLlm: CharacterStates[],
+  ): Promise<Record<string, string>> => {
+    if (!llm) llm = await resolveWardrobeLlm(db, book);
+    const { picks, tokensIn, tokensOut } = await pickStatesWithLlm(
+      llm,
+      momentDescription,
+      scene,
+      needLlm,
+    );
+    totalIn += tokensIn;
+    totalOut += tokensOut;
+    calls += 1;
+    return picks;
+  };
+
+  let assigned = 0;
+  for (const point of points) {
+    const present = point.presentCharacterIds
+      .map((id) => statesByChar.get(id))
+      .filter((c): c is CharacterStates => c !== undefined);
+
+    const chapterScenes = scenesByChapter.get(point.chapterId) ?? [];
+    const ctx = sceneContextForOffset(chapterScenes, point.charOffset);
+    const scene: AssignSceneContext = {
+      setting: ctx.setting,
+      timeOfDay: ctx.timeOfDay,
+      mood: ctx.mood,
+    };
+
+    try {
+      const map = await assignPointStates(point.momentDescription, scene, present, picker);
+      await persistPointStates(db, point.id, map);
+      assigned += 1;
+    } catch (err) {
+      // A single point's assignment must never block the book. Persist a
+      // base-default map (empty picks -> merger defaults every multi-state
+      // character to base) so the point still has a coherent assignment.
+      const fallback: Record<string, string> = {};
+      for (const c of present) {
+        const built = c.states.find((s) => s.isBase) ?? c.states[0];
+        if (built) fallback[c.characterId] = built.id;
+      }
+      try {
+        await persistPointStates(db, point.id, fallback);
+      } catch {
+        // ignore — leave the column null; not fatal.
+      }
+      log(
+        `wardrobe assignment for point ${point.id} failed (defaulted to base): ` +
+          redactSecrets(err instanceof Error ? err.message : String(err)),
+      );
+    }
+  }
+
+  log(
+    `wardrobe assignment: ${assigned}/${points.length} point(s) assigned via ${calls} LLM call(s)`,
+  );
+  return { tokensIn: totalIn, tokensOut: totalOut, calls };
+}
+
 /** Per kind+subject bookkeeping of what already exists in the images table. */
 interface ExistingImages {
   done: Set<string>;
@@ -743,6 +905,19 @@ async function planIllustrationPoints(args: {
   let planned = 0;
   let pointCount = 0;
 
+  /**
+   * Every persisted point (with its DB id, chapter, offset, moment, and present
+   * cast) collected across chapters, for the per-scene wardrobe-state assignment
+   * pass that runs once all points exist (see assignWardrobeStates).
+   */
+  const persistedPoints: Array<{
+    id: string;
+    chapterId: string;
+    charOffset: number;
+    momentDescription: string;
+    presentCharacterIds: string[];
+  }> = [];
+
   let chapterIndex = 0;
   for (const chapter of chapterRows) {
     await reportProgress(runId, {
@@ -795,19 +970,29 @@ async function planIllustrationPoints(args: {
         // a retry of this run resumes via the shouldReplan gate rather than
         // re-planning. Each point carries runId so Phase 0 can tell a retry of
         // THIS run from a genuinely fresh "Generate art" run.
-        await db.insert(illustrationPoints).values(
-          points.map((p) => ({
-            bookId,
-            chapterId: chapter.id,
-            runId,
-            idx: p.idx,
-            charOffset: p.charOffset,
-            anchorQuote: p.anchorQuote,
-            momentDescription: p.momentDescription,
-            presentCharacterIds: p.presentCharacterIds,
-            score: p.score,
-          })),
-        );
+        const inserted = await db
+          .insert(illustrationPoints)
+          .values(
+            points.map((p) => ({
+              bookId,
+              chapterId: chapter.id,
+              runId,
+              idx: p.idx,
+              charOffset: p.charOffset,
+              anchorQuote: p.anchorQuote,
+              momentDescription: p.momentDescription,
+              presentCharacterIds: p.presentCharacterIds,
+              score: p.score,
+            })),
+          )
+          .returning({
+            id: illustrationPoints.id,
+            chapterId: illustrationPoints.chapterId,
+            charOffset: illustrationPoints.charOffset,
+            momentDescription: illustrationPoints.momentDescription,
+            presentCharacterIds: illustrationPoints.presentCharacterIds,
+          });
+        persistedPoints.push(...inserted);
       }
       planned++;
       pointCount += points.length;
@@ -825,6 +1010,44 @@ async function planIllustrationPoints(args: {
   }
 
   log(`planning complete: ${pointCount} point(s) across ${planned}/${total} chapter(s)`);
+
+  // -------------------------------------------------------------------------
+  // Per-scene wardrobe-state assignment (Phase 2, chunk 3). With every point
+  // persisted, decide which appearance state each present character is in and
+  // fill illustration_points.characterStates. Runs after planning so it sees
+  // the full, stable point set; ~one LLM call per point with a present
+  // multi-state character. A failure here logs and defaults to base — it must
+  // never sink the planning stage (the points already exist and can be
+  // re-illustrated; the assignment is overwritten on the next run).
+  // -------------------------------------------------------------------------
+  if (persistedPoints.length > 0) {
+    try {
+      const scenesByChapter = new Map<string, SceneRow[]>();
+      for (const s of await loadAnalyzedScenes(db, bookId)) {
+        const list = scenesByChapter.get(s.chapterId) ?? [];
+        list.push(s);
+        scenesByChapter.set(s.chapterId, list);
+      }
+      const usage = await assignWardrobeStates({
+        db,
+        bookId,
+        book,
+        points: persistedPoints,
+        scenesByChapter,
+        log,
+      });
+      await incrementRunTokens(runId, usage.tokensIn, usage.tokensOut);
+    } catch (err) {
+      // A systemic failure of the whole assignment pass (e.g. the wardrobe LLM
+      // is unreachable) must not undo a successful plan; the points stand with
+      // null characterStates and prompt integration (chunk 4) falls back to base.
+      log(
+        `wardrobe assignment pass skipped: ${redactSecrets(
+          err instanceof Error ? err.message : String(err),
+        )}`,
+      );
+    }
+  }
 }
 
 /** Shared context for a single Phase-1 work item (carried into the pool). */
