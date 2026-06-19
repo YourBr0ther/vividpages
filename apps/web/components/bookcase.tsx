@@ -10,10 +10,18 @@ import { BookCard, UploadingBookCard } from './book-card';
 import { ConfirmDialog } from './confirm-dialog';
 import { ToastViewport, useToasts } from './toasts';
 import { UploadDrop } from './upload-drop';
+import { UploadWizard } from './upload-wizard';
 
 interface PendingUpload {
   key: string;
   title: string;
+}
+
+/** A freshly-uploaded book awaiting the wizard's up-front choices. */
+interface WizardTarget {
+  bookId: string;
+  title: string;
+  mature: boolean;
 }
 
 /**
@@ -32,6 +40,7 @@ export function Bookcase({ initialBooks }: { initialBooks: BookCardData[] }) {
   const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set());
   const [deleteTarget, setDeleteTarget] = useState<BookCardData | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [wizard, setWizard] = useState<WizardTarget | null>(null);
 
   const books = useMemo(() => {
     const serverIds = new Set(initialBooks.map((book) => book.id));
@@ -63,8 +72,15 @@ export function Bookcase({ initialBooks }: { initialBooks: BookCardData[] }) {
       form.set('file', file);
       const res = await fetch('/api/books', { method: 'POST', body: form });
       if (res.status === 201) {
-        const data = (await res.json()) as { book: BookLike };
+        const data = (await res.json()) as { book: BookLike & { matureContent?: boolean } };
         setLocalBooks((current) => [toBookCardData(data.book), ...current]);
+        // The book is uploaded but not yet started — launch the wizard to
+        // collect the up-front choices; its Finish kicks off the pipeline.
+        setWizard({
+          bookId: data.book.id,
+          title: data.book.title,
+          mature: data.book.matureContent ?? false,
+        });
         router.refresh();
       } else if (res.status === 409) {
         pushToast('info', `“${title}” is already on your shelf.`);
@@ -157,6 +173,29 @@ export function Bookcase({ initialBooks }: { initialBooks: BookCardData[] }) {
           onConfirm={confirmDelete}
           onCancel={() => {
             if (!deleting) setDeleteTarget(null);
+          }}
+        />
+      ) : null}
+
+      {wizard ? (
+        <UploadWizard
+          bookId={wizard.bookId}
+          bookTitle={wizard.title}
+          initialMature={wizard.mature}
+          onFinished={() => {
+            setWizard(null);
+            pushToast('info', `“${wizard.title}” is on its way — generating illustrations.`);
+            router.refresh();
+          }}
+          onCancel={() => {
+            // Dismissing leaves the book uploaded-but-not-started; it stays on
+            // the shelf and can be started from its detail page.
+            setWizard(null);
+            pushToast(
+              'info',
+              `“${wizard.title}” was added but not started yet — open it to begin.`,
+            );
+            router.refresh();
           }}
         />
       ) : null}

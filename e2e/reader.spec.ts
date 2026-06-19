@@ -44,11 +44,21 @@ test.describe.serial('the reading journey', () => {
     await expect(page.getByText('Your shelf is waiting')).toBeVisible();
   });
 
-  test('uploads the EPUB and watches it become ready', async () => {
+  test('uploads the EPUB, finishes the wizard, and watches it become ready', async () => {
     await page.locator('input[type="file"]').setInputFiles(EPUB_PATH);
 
-    // Progress overlay: optimistic "Uploading" card first, then the live
-    // pipeline stages streamed over SSE.
+    // Upload now opens the setup wizard before anything runs: step 1 asks
+    // "Is this a mature book?", step 2 picks the style, Finish kicks off the
+    // whole auto-chained pipeline.
+    const wizard = page.getByRole('dialog');
+    await expect(wizard.getByRole('heading', { name: 'Is this a mature book?' })).toBeVisible({
+      timeout: 20_000,
+    });
+    await wizard.getByRole('button', { name: 'Next' }).click();
+    await expect(wizard.getByRole('heading', { name: 'Illustration style' })).toBeVisible();
+    await wizard.getByRole('button', { name: 'Finish & generate' }).click();
+
+    // After Finish the live pipeline stages stream over SSE.
     await expect(
       page.getByText(/Uploading|Reading the book|Finding the scenes/).first(),
     ).toBeVisible({ timeout: 20_000 });

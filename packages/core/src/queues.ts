@@ -24,6 +24,13 @@ export interface StageJobPayload {
 export interface ProfilesJobPayload extends StageJobPayload {
   /** Re-run LLM profiling even for characters that already have a profile. */
   force?: boolean;
+  /**
+   * True when profiles was reached as part of the full auto-chained pipeline
+   * (upload wizard → ingest → … → profiles): on success it continues into
+   * imagine. The standalone "Rebuild profiles" re-run leaves this unset, so a
+   * manual profiles rebuild stops at profiles (no surprise art regeneration).
+   */
+  autoChain?: boolean;
 }
 
 /** Regenerate exactly one subject (portrait or storyboard point). */

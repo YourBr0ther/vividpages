@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
 
-import { getQueue } from '@vividpages/core/queues';
 import { putObject } from '@vividpages/core/storage';
-import { books, getDb, pipelineRuns, userSettings } from '@vividpages/db';
+import { books, getDb, userSettings } from '@vividpages/db';
 import { and, eq } from 'drizzle-orm';
 import { NextResponse, type NextRequest } from 'next/server';
 
@@ -12,9 +11,15 @@ import { listBooksWithLatestRun } from '@/lib/queries';
 import { MAX_UPLOAD_BYTES } from '@/lib/upload-limits';
 
 /**
- * POST /api/books — upload an EPUB (multipart field 'file') and kick off the
- * ingest pipeline. Returns 201 {book} or 409 with the existing bookId when
- * the same file (by sha256) was already uploaded by this user.
+ * POST /api/books — upload an EPUB (multipart field 'file'). Returns 201
+ * {book} or 409 with the existing bookId when the same file (by sha256) was
+ * already uploaded by this user.
+ *
+ * The upload no longer kicks off the pipeline. The book is created at status
+ * 'uploading' with no pipeline run; the upload wizard collects the up-front
+ * choices (mature? + style preset) and its Finish (POST
+ * /api/books/[id]/start) is what enqueues the ingest head, which then
+ * auto-chains the whole pipeline to finished art.
  */
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -68,7 +73,8 @@ export async function POST(request: NextRequest) {
   await putObject('epubs', epubObjectKey, buf, 'application/epub+zip');
 
   // Seed the new book's mature-content flag from the uploader's default
-  // (false when no settings row exists yet).
+  // (false when no settings row exists yet). The wizard's mature step starts
+  // pre-filled from this and overrides it on Finish.
   const settings = await db.query.userSettings.findFirst({
     where: eq(userSettings.userId, userId),
     columns: { matureContentDefault: true },
@@ -76,35 +82,24 @@ export async function POST(request: NextRequest) {
   const matureContent = settings?.matureContentDefault ?? false;
 
   let book: typeof books.$inferSelect;
-  let runId: string;
   try {
-    // Book + run are created atomically so a failure can't leave an
-    // 'ingesting' book with no pipeline run.
-    ({ book, runId } = await db.transaction(async (tx) => {
-      // Placeholder title from the filename; ingest overwrites it with the
-      // authoritative EPUB metadata. Status starts at 'ingesting' because the
-      // job is enqueued in this same request.
-      const [created] = await tx
-        .insert(books)
-        .values({
-          userId,
-          title: file.name.replace(/\.epub$/i, ''),
-          sha256,
-          epubObjectKey,
-          status: 'ingesting',
-          matureContent,
-        })
-        .returning();
-      if (!created) throw new Error('Book insert returned no row');
-
-      const [run] = await tx
-        .insert(pipelineRuns)
-        .values({ bookId: created.id, stage: 'ingest', currentStep: 'Queued', status: 'running' })
-        .returning({ id: pipelineRuns.id });
-      if (!run) throw new Error('Pipeline run insert returned no row');
-
-      return { book: created, runId: run.id };
-    }));
+    // Placeholder title from the filename; ingest overwrites it with the
+    // authoritative EPUB metadata. Status starts at 'uploading' and there is
+    // no pipeline run yet — the wizard's Finish creates the run and enqueues
+    // ingest.
+    const [created] = await db
+      .insert(books)
+      .values({
+        userId,
+        title: file.name.replace(/\.epub$/i, ''),
+        sha256,
+        epubObjectKey,
+        status: 'uploading',
+        matureContent,
+      })
+      .returning();
+    if (!created) throw new Error('Book insert returned no row');
+    book = created;
   } catch (error) {
     // Unique-violation race: the same file was uploaded concurrently.
     if (isUniqueViolation(error)) {
@@ -114,31 +109,6 @@ export async function POST(request: NextRequest) {
       );
     }
     throw error;
-  }
-
-  try {
-    await getQueue('ingest').add('ingest', { bookId: book.id, runId });
-  } catch (error) {
-    // The book/run rows already exist; mark them failed (honest, visible,
-    // deletable state) instead of leaving the book stuck at 'ingesting'.
-    console.error(`books: failed to enqueue ingest job for book ${book.id}:`, error);
-    const enqueueError = 'failed to enqueue ingest job';
-    try {
-      await db
-        .update(books)
-        .set({ status: 'failed', error: enqueueError })
-        .where(eq(books.id, book.id));
-      await db
-        .update(pipelineRuns)
-        .set({ status: 'failed', error: enqueueError })
-        .where(eq(pipelineRuns.id, runId));
-    } catch (bookkeepingError) {
-      console.error(`books: failed to mark book ${book.id} as failed:`, bookkeepingError);
-    }
-    return NextResponse.json(
-      { error: 'Failed to enqueue ingest job.' },
-      { status: 500 },
-    );
   }
 
   return NextResponse.json({ book }, { status: 201 });

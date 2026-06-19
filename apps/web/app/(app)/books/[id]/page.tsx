@@ -10,6 +10,7 @@ import { ChapterList } from '@/components/chapter-list';
 import { DangerZone } from '@/components/danger-zone';
 import { MatureContentToggle } from '@/components/mature-content-toggle';
 import { PipelineControls } from '@/components/pipeline-controls';
+import { StartBookCard } from '@/components/start-book-card';
 import { STATUS_LABELS } from '@/lib/book-card-data';
 import { findOwnedBook } from '@/lib/find-owned-book';
 import {
@@ -185,18 +186,26 @@ export default async function BookDetailPage({ params }: PageProps) {
             <CastStrip bookId={book.id} cast={cast.slice(0, 5)} total={cast.length} />
           ) : null}
 
-          <PipelineControls
-            bookId={book.id}
-            status={book.status}
-            initiallyActive={isActiveRun(latestRun)}
-            initialError={book.error}
-            analyzedScenes={analyzedScenes}
-            totalScenes={sceneCount}
-            characterCount={cast.length}
-            portraitCount={portraitCount}
-            provider={llm.provider}
-            model={llm.model}
-          />
+          {book.status === 'uploading' ? (
+            <StartBookCard
+              bookId={book.id}
+              bookTitle={book.title}
+              initialMature={book.matureContent}
+            />
+          ) : (
+            <PipelineControls
+              bookId={book.id}
+              status={book.status}
+              initiallyActive={isActiveRun(latestRun)}
+              initialError={book.error}
+              analyzedScenes={analyzedScenes}
+              totalScenes={sceneCount}
+              characterCount={cast.length}
+              portraitCount={portraitCount}
+              provider={llm.provider}
+              model={llm.model}
+            />
+          )}
 
           <MatureContentToggle
             bookId={book.id}
