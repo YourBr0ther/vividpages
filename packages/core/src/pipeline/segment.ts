@@ -3,7 +3,8 @@ import { asc, eq } from 'drizzle-orm';
 
 import type { StageJobPayload } from '../queues';
 import { segmentChapter } from '../segment';
-import { completeRun, reportProgress, setBookStatus } from './progress';
+import { enqueueNextStage } from './chain';
+import { reportProgress, setBookStatus } from './progress';
 
 const INSERT_CHUNK_SIZE = 100;
 
@@ -78,11 +79,15 @@ export async function runSegment({ bookId, runId }: StageJobPayload): Promise<vo
     await db.insert(scenes).values(chunk);
   }
 
-  // The book is readable now. Analysis (LLM over every scene — expensive,
-  // tens of minutes on a full novel) is user-triggered from the detail
-  // page's pipeline controls (POST /api/books/[id]/pipeline), not chained
-  // automatically off every upload.
-  await reportProgress(runId, { stage: 'segment', percent: 100, currentStep: 'Scenes ready' });
-  await setBookStatus(bookId, 'ready');
-  await completeRun(runId);
+  // The book is readable now. Auto-chain straight into analysis: the wizard's
+  // single Finish runs the whole pipeline to finished art, so segment hands
+  // off to analyze (which chains on through profiles → imagine) instead of
+  // completing the run and waiting for a manual "run analysis" click.
+  await reportProgress(runId, {
+    stage: 'segment',
+    percent: 100,
+    currentStep: 'Scenes ready — queued for analysis',
+  });
+  await setBookStatus(bookId, 'analyzing');
+  await enqueueNextStage('segment', { bookId, runId });
 }

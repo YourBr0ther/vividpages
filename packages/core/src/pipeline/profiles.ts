@@ -21,6 +21,7 @@ import {
 } from '../characters/dedupe';
 import type { ProfilesJobPayload } from '../queues';
 import { redactSecrets } from '../redact';
+import { enqueueNextStage, shouldChainProfilesToImagine } from './chain';
 import { resolveEmbedder, resolveLlm } from './llm';
 import {
   completeRun,
@@ -267,7 +268,7 @@ function isSystemicLlmError(err: unknown): boolean {
  * a profile and an appearanceToken unless `force` is set.
  */
 export async function runProfiles(payload: ProfilesJobPayload): Promise<void> {
-  const { bookId, runId, force = false } = payload;
+  const { bookId, runId, force = false, autoChain = false } = payload;
   const db = getDb();
   const log = (msg: string) => console.log(`[profiles ${bookId}] ${msg}`);
 
@@ -587,14 +588,28 @@ export async function runProfiles(payload: ProfilesJobPayload): Promise<void> {
       (failures > 0 ? `, ${failures} profile failures` : ''),
   );
 
+  if (shouldChainProfilesToImagine({ autoChain })) {
+    // Full pipeline (upload wizard / "analyze" re-run): chain on into art
+    // generation. The run stays open and completes at imagine — closing the
+    // old manual "generate art" gate.
+    await reportProgress(runId, {
+      stage: 'profiles',
+      percent: 100,
+      currentStep: 'Character profiles complete — queued for illustration',
+    });
+    await setBookStatus(bookId, 'imagining');
+    await enqueueNextStage('profiles', { bookId, runId });
+    return;
+  }
+
+  // Standalone "Rebuild profiles" re-run: stop here. Art generation is long
+  // (~15s/image × portraits + every scene), so a manual profiles rebuild does
+  // not silently kick off a full re-paint — the user triggers art explicitly.
   await reportProgress(runId, {
     stage: 'profiles',
     percent: 100,
     currentStep: 'Character profiles complete',
   });
-  // Imagine is deliberately NOT chained here: art generation is long
-  // (~15s/image x portraits + every scene) so the user triggers it
-  // explicitly from the pipeline card once they've reviewed the cast.
   await setBookStatus(bookId, 'ready');
   await completeRun(runId);
 }

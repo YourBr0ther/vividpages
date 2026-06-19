@@ -361,5 +361,9 @@ export async function runAnalyze({ bookId, runId }: StageJobPayload): Promise<vo
     currentStep: 'Analysis complete — queued for character profiling',
   });
   await setBookStatus(bookId, 'profiling');
-  await getQueue('profiles').add('profiles', { bookId, runId });
+  // Auto-chain: analyze is only ever reached via the full pipeline (upload
+  // wizard) or the manual "analyze" re-run, both of which are meant to flow
+  // through to finished art. `autoChain` tells profiles to continue into
+  // imagine; only the standalone "Rebuild profiles" button skips it.
+  await getQueue('profiles').add('profiles', { bookId, runId, autoChain: true });
 }

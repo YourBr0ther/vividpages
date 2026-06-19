@@ -3,8 +3,9 @@ import { eq } from 'drizzle-orm';
 
 import { parseEpub } from '../epub/parse';
 import { extractChapterText } from '../epub/text';
-import { getQueue, type StageJobPayload } from '../queues';
+import type { StageJobPayload } from '../queues';
 import { getObject, putObject } from '../storage';
+import { enqueueNextStage } from './chain';
 import { reportProgress, setBookStatus } from './progress';
 
 /** Cover media types we map to a conventional file extension. */
@@ -139,5 +140,5 @@ export async function runIngest({ bookId, runId }: StageJobPayload): Promise<voi
 
   await setBookStatus(bookId, 'segmenting');
   await reportProgress(runId, { stage: 'ingest', percent: 100, currentStep: 'Queued for segmentation' });
-  await getQueue('segment').add('segment', { bookId, runId });
+  await enqueueNextStage('ingest', { bookId, runId });
 }
