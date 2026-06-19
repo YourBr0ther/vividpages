@@ -17,6 +17,13 @@ const envSchema = z.object({
   MINIO_ACCESS_KEY: z.string().min(1),
   MINIO_SECRET_KEY: z.string().min(1),
   OLLAMA_URL: z.url().default('http://10.0.2.192:11434'),
+  /**
+   * Model for the wardrobe/body extraction stage. The spike chose qwen2.5:14b
+   * (strictly better than 8b on single-base discipline and in-list state
+   * picks); the rest of the pipeline keeps its own model. Always resolved
+   * against the book owner's ollama host.
+   */
+  WARDROBE_LLM_MODEL: z.string().min(1).default('qwen2.5:14b'),
   COMFYUI_URL: z.url().default('http://10.0.2.192:8000'),
   AUTH_SECRET: z.string().min(16, { error: 'must be at least 16 characters' }),
   ENCRYPTION_KEY: z

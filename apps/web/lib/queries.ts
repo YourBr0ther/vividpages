@@ -1,6 +1,7 @@
 import {
   books,
   chapters,
+  characterAppearanceStates,
   characters,
   getDb,
   illustrationPoints,
@@ -12,6 +13,11 @@ import {
   type ImageKind,
   type PipelineRunStatus,
 } from '@vividpages/db';
+import {
+  orderAppearanceStates,
+  stateTypeLabel,
+  type DisplayState,
+} from '@vividpages/core/characters/wardrobe-display';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 
 import type {
@@ -284,6 +290,26 @@ export interface CastProfile {
   oneLine: string | null;
 }
 
+/**
+ * One wardrobe/appearance state as the cast page renders it: a reference-image
+ * thumb (via the SAME `/api/images/[id]?thumb=1` path as portraits — the
+ * reference render is stored as an `appearance_state` image keyed to the state
+ * id), a human type label, and the outfit descriptor.
+ */
+export interface CastWardrobeState {
+  id: string;
+  /** 'base' | 'additional' now; 'underwear' | 'nude' later (Phase 4). */
+  type: string;
+  /** Human label: "Base" / "Additional" / …. */
+  typeLabel: string;
+  descriptor: string;
+  /**
+   * Thumb URL for the state's reference render, or null when it hasn't been
+   * generated yet (graceful placeholder on the card).
+   */
+  imageUrl: string | null;
+}
+
 export interface CastMember {
   id: string;
   name: string;
@@ -301,6 +327,15 @@ export interface CastMember {
   loraName: string | null;
   loraKeyword: string | null;
   loraStrength: number | null;
+  /**
+   * Immutable, clothing-stripped body descriptor (the consistency anchor), or
+   * null until the wardrobe extraction has run.
+   */
+  bodyModel: string | null;
+  /** Opt-in flag: this minor has been promoted to a full wardrobe. */
+  wardrobeUpgraded: boolean;
+  /** Wardrobe states (base first, then additional, …); empty until extracted. */
+  wardrobeStates: CastWardrobeState[];
 }
 
 const CAST_ROLES = new Set<string>(CAST_ROLE_ORDER);
@@ -334,7 +369,7 @@ function toCastProfile(raw: unknown): CastProfile | null {
  * detail page's cast preview strip (which slices the top of this list).
  */
 export async function listCast(bookId: string): Promise<CastMember[]> {
-  const [rows, portraitByCharacter] = await Promise.all([
+  const [rows, portraitByCharacter, statesByCharacter, stateImageBySubject] = await Promise.all([
     getDb()
       .select({
         id: characters.id,
@@ -347,15 +382,32 @@ export async function listCast(bookId: string): Promise<CastMember[]> {
         loraName: characters.loraName,
         loraKeyword: characters.loraKeyword,
         loraStrength: characters.loraStrength,
+        bodyModel: characters.bodyModel,
+        wardrobeUpgraded: characters.wardrobeUpgraded,
       })
       .from(characters)
       .where(eq(characters.bookId, bookId))
       .orderBy(desc(characters.sceneCount), asc(characters.name)),
     latestDoneImagesBySubject(bookId, 'character_portrait'),
+    listAppearanceStatesByCharacter(bookId),
+    // Reference renders are stored as `appearance_state` images keyed to the
+    // STATE id — so the same image-serving path as portraits works for them.
+    latestDoneImagesBySubject(bookId, 'appearance_state'),
   ]);
 
   return rows.map((row) => {
     const portraitImageId = portraitByCharacter.get(row.id)?.id ?? null;
+    const ordered = orderAppearanceStates(statesByCharacter.get(row.id) ?? []);
+    const wardrobeStates: CastWardrobeState[] = ordered.map((state) => {
+      const stateImageId = stateImageBySubject.get(state.id)?.id ?? null;
+      return {
+        id: state.id,
+        type: state.type,
+        typeLabel: stateTypeLabel(state.type),
+        descriptor: state.descriptor,
+        imageUrl: stateImageId ? `/api/images/${stateImageId}?thumb=1` : null,
+      };
+    });
     return {
       id: row.id,
       name: row.name,
@@ -369,8 +421,43 @@ export async function listCast(bookId: string): Promise<CastMember[]> {
       loraName: row.loraName,
       loraKeyword: row.loraKeyword,
       loraStrength: row.loraStrength,
+      bodyModel: row.bodyModel,
+      wardrobeUpgraded: row.wardrobeUpgraded,
+      wardrobeStates,
     };
   });
+}
+
+/**
+ * Every character's appearance states for a book in ONE query (no per-character
+ * N+1), grouped by character id. Ordering is applied by `orderAppearanceStates`
+ * at the call site (base first, then additional, …). State reference images are
+ * resolved separately via the shared image-by-subject grouping.
+ */
+async function listAppearanceStatesByCharacter(
+  bookId: string,
+): Promise<Map<string, DisplayState[]>> {
+  const stateRows = await getDb()
+    .select({
+      id: characterAppearanceStates.id,
+      characterId: characterAppearanceStates.characterId,
+      type: characterAppearanceStates.type,
+      descriptor: characterAppearanceStates.descriptor,
+      isBase: characterAppearanceStates.isBase,
+      imageObjectKey: characterAppearanceStates.imageObjectKey,
+      thumbObjectKey: characterAppearanceStates.thumbObjectKey,
+    })
+    .from(characterAppearanceStates)
+    .innerJoin(characters, eq(characterAppearanceStates.characterId, characters.id))
+    .where(eq(characters.bookId, bookId));
+
+  const byCharacter = new Map<string, DisplayState[]>();
+  for (const { characterId, ...state } of stateRows) {
+    const list = byCharacter.get(characterId);
+    if (list) list.push(state);
+    else byCharacter.set(characterId, [state]);
+  }
+  return byCharacter;
 }
 
 /**

@@ -4,6 +4,7 @@ import { bindingFor } from './book-cover-art';
 import { CharacterLoraConfig } from './character-lora-config';
 import { CharacterMergeAction } from './character-merge-action';
 import { PortraitLightbox } from './portrait-lightbox';
+import { WardrobeSheet } from './wardrobe-sheet';
 
 /** The trait fields rendered as chips, in display order. */
 const CHIP_TRAITS = [
@@ -129,6 +130,8 @@ export function CharacterCard({
             </p>
           </details>
         ) : null}
+
+        <WardrobeSheet member={member} />
 
         <CharacterLoraConfig
           characterId={member.id}
