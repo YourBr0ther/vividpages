@@ -138,6 +138,45 @@ enqueues the auto-chained run.
   composition.
 - Migrations applied to dev + verified; e2e green; tsc/build clean.
 
+## Extraction spike findings (2026-06-19) — model + mandatory scaffolding
+
+Two throwaway spikes ran the extraction probes against the dev book via the real
+`completeStructured` path (`llama3.1:8b` then `qwen2.5:14b`, both on the box).
+
+**Model decision: use `qwen2.5:14b`** for the wardrobe/body/location stage, not
+`llama3.1:8b`. 14b is strictly better where 8b broke: single-base discipline (8b
+double-based a character; 14b 3/3 correct), per-scene state pick under a hard
+`z.enum` (**100% in-list, 0 repair activations** on 14b), and it didn't
+hallucinate locations. Latency ~7–20s/char (outfit pass) / ~1s (per-scene) — fine
+for an offline batch stage.
+
+**Per-probe verdicts:**
+- **Body model — GOOD.** Compose the descriptor deterministically from the
+  structured fields and strip clothing (the LLM leaks attire into the
+  "immutable" descriptor otherwise). Respects nulls; no hallucination.
+- **Per-scene state pick — RELIABLE only with a HARD `z.enum`** built per
+  character from that character's actual labels + default-`base` fallback.
+  Mandatory; loose-string-then-validate is not enough.
+- **Location registry — descriptors good, dedup weak.** Single-shot dedup over
+  ~80 settings under-merges (3–4× redundancy on key rooms). Needs a two-pass
+  reconciliation (extract → separate merge call returning canonical ids), like
+  the existing character dedup.
+- **Outfit consolidation — the hard problem, NOT a model fix.** Both models
+  conflate *transient states* (injuries, "soaked", "tousled", mood, blood/dirt)
+  with outfits because the source signal (`description_delta`/`state_changes`)
+  is mostly those deltas; 14b made it worse (one "outfit" per injury).
+
+**Mandatory scaffolding for Phase 2/4 (beyond model choice):**
+1. **Transient-state signal separation (dominant lever):** deterministically
+   strip injuries/mood/dirt/wetness from the clothing signal before the outfit
+   LLM call (or route clothing vs transient-state to separate extractors). Data
+   fix — no prompt wording solves it.
+2. **Hard `z.enum` per character** for per-scene state (`completeStructured`
+   repair loop as backstop — barely exercised on 14b).
+3. **Single-base clamp** in code (cheap safety net; pick max-mentions).
+4. **Dedup-merge** for outfits + **two-pass reconciliation** for locations.
+5. **Body-model descriptor composed from fields + clothing-stripped.**
+
 ## Out of scope (YAGNI)
 
 Reference images driving generation (img2img/IP-Adapter — Z-Image lacks it);
