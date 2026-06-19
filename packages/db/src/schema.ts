@@ -291,6 +291,17 @@ export const characters = pgTable(
     embedding: vector({ dimensions: 768 }),
     embeddingModel: text(),
     sceneCount: integer().notNull().default(0),
+    /**
+     * Immutable, clothing-stripped physical descriptor (face/build/hair/etc.)
+     * reused across every appearance state so only the wardrobe varies. Null
+     * until the wardrobe extraction populates it (later chunk).
+     */
+    bodyModel: text(),
+    /**
+     * Opt-in flag letting a minor character receive the full wardrobe (multiple
+     * appearance states) instead of just a body model + single base outfit.
+     */
+    wardrobeUpgraded: boolean().notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -323,6 +334,45 @@ export const sceneCharacters = pgTable(
   },
   (t) => [primaryKey({ columns: [t.sceneId, t.characterId] })],
 );
+
+/**
+ * A single wardrobe/appearance state for a character. The body model
+ * (`characters.bodyModel`) stays constant; each state layers a clothing
+ * descriptor on top. One row is the `base` outfit; others are `additional`
+ * outfits. Phase 4 will also store `underwear` | `nude` states here.
+ */
+export const characterAppearanceStates = pgTable(
+  'character_appearance_states',
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    characterId: uuid()
+      .notNull()
+      .references(() => characters.id, { onDelete: 'cascade' }),
+    /**
+     * Allowed values: 'base' | 'additional' (now), plus 'underwear' | 'nude'
+     * (Phase 4). Kept as plain text — NOT a pg enum — so adding the mature
+     * states later needs no migration.
+     */
+    type: text().notNull(),
+    /** Structured clothing descriptor woven into image prompts. */
+    descriptor: text().notNull(),
+    /** Exactly one base per character (enforced in app code, not the DB). */
+    isBase: boolean().notNull().default(false),
+    /** Scene-mention frequency; drives single-base selection. */
+    sceneMentions: integer().notNull().default(0),
+    /** Set once the reference model image is generated (later chunk). */
+    imageObjectKey: text(),
+    thumbObjectKey: text(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('character_appearance_states_character_idx').on(t.characterId)],
+);
+
+export type CharacterAppearanceState =
+  typeof characterAppearanceStates.$inferSelect;
+export type NewCharacterAppearanceState =
+  typeof characterAppearanceStates.$inferInsert;
 
 // ---------------------------------------------------------------------------
 // Images
@@ -398,6 +448,12 @@ export const illustrationPoints = pgTable(
       .default(sql`'{}'::uuid[]`),
     /** LLM importance rank (top-N selection + future tuning). */
     score: real(),
+    /**
+     * Per-scene appearance assignment: map of characterId → appearance state id
+     * (`character_appearance_states.id`) chosen for this point. Populated by the
+     * per-scene state-mapping step (later chunk); null until then.
+     */
+    characterStates: jsonb().$type<Record<string, string>>(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
