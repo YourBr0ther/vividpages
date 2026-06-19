@@ -93,6 +93,32 @@ export async function resolveLlm(
 }
 
 /**
+ * Resolves the LLM for the wardrobe extraction stage. Unlike resolveLlm, this
+ * always uses ollama with the WARDROBE_LLM_MODEL (default qwen2.5:14b — the
+ * spike's choice): this offline batch stage needs 14b's single-base discipline
+ * and in-list state picks regardless of the book's general LLM pin. The
+ * owner's ollama host override is still honored. Pass `model` to override the
+ * env default (used by tests).
+ */
+export async function resolveWardrobeLlm(
+  db: Db,
+  book: { userId: string },
+  model?: string,
+): Promise<LLM> {
+  const settings = await db.query.userSettings.findFirst({
+    where: eq(userSettings.userId, book.userId),
+  });
+  const config = await resolveConfig(
+    db,
+    book.userId,
+    'ollama',
+    model ?? getEnv().WARDROBE_LLM_MODEL,
+    () => settings?.ollamaUrl || getEnv().OLLAMA_URL,
+  );
+  return createLLM(config);
+}
+
+/**
  * Resolves the text embedder for a book's owner: user_settings -> env
  * defaults. OpenAI decrypts the owner's stored key; ollama uses host/env.
  */

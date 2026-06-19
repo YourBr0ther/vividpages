@@ -21,8 +21,14 @@ import {
 } from '../characters/dedupe';
 import type { ProfilesJobPayload } from '../queues';
 import { redactSecrets } from '../redact';
+import {
+  extractOutfits,
+  isWardrobeEligible,
+  persistCharacterWardrobe,
+  type ClothingSignal,
+} from '../characters/wardrobe-extract';
 import { enqueueNextStage, shouldChainProfilesToImagine } from './chain';
-import { resolveEmbedder, resolveLlm } from './llm';
+import { resolveEmbedder, resolveLlm, resolveWardrobeLlm } from './llm';
 import {
   completeRun,
   incrementRunTokens,
@@ -252,6 +258,16 @@ function normalizeProfile(profile: CharacterProfile): CharacterProfile {
     distinguishing: sanitizeTraitValue(profile.distinguishing, 'distinguishing'),
     oneLine: profile.oneLine.trim(),
   };
+}
+
+/** Human-readable note from a scene_characters.stateChanges payload. */
+function wardrobeStateNote(stateChanges: unknown): string | null {
+  if (typeof stateChanges === 'string') return stateChanges.trim() || null;
+  if (stateChanges && typeof stateChanges === 'object' && 'note' in stateChanges) {
+    const note = (stateChanges as { note?: unknown }).note;
+    if (typeof note === 'string') return note.trim() || null;
+  }
+  return null;
 }
 
 function isSystemicLlmError(err: unknown): boolean {
@@ -552,6 +568,86 @@ export async function runProfiles(payload: ProfilesJobPayload): Promise<void> {
         .set({ role: 'minor', appearanceToken })
         .where(eq(characters.id, s.id));
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Pass 4: wardrobe extraction (Phase 2). Rides with profiles — no new queue.
+  // For each eligible character (role 'main' OR wardrobeUpgraded) compose the
+  // clothing-stripped bodyModel and consolidate per-scene clothing into a
+  // base + additional outfit set. Uses qwen2.5:14b (the spike's pick) via a
+  // dedicated resolver. Idempotent: states are replaced per character.
+  // Best-effort: a wardrobe failure for one character is logged and skipped,
+  // never failing the profiles stage (which already committed profiles/tokens).
+  // -------------------------------------------------------------------------
+  await reportProgress(runId, {
+    stage: 'profiles',
+    percent: 92,
+    currentStep: 'Extracting wardrobe',
+  });
+  try {
+    const eligibleRows = await db
+      .select({
+        id: characters.id,
+        name: characters.name,
+        role: characters.role,
+        wardrobeUpgraded: characters.wardrobeUpgraded,
+        profile: characters.profile,
+      })
+      .from(characters)
+      .where(eq(characters.bookId, bookId));
+    const eligible = eligibleRows.filter(isWardrobeEligible);
+
+    if (eligible.length > 0) {
+      const wardrobeLlm = await resolveWardrobeLlm(db, book);
+      const wardrobeHealth = await wardrobeLlm.healthCheck();
+      if (!wardrobeHealth.ok) {
+        throw new Error(
+          `wardrobe model '${wardrobeLlm.model}' health check failed: ${wardrobeHealth.detail}`,
+        );
+      }
+      const extractor = (name: string, signals: string[]) =>
+        extractOutfits(wardrobeLlm, name, signals);
+
+      let wardrobeCount = 0;
+      for (const c of eligible) {
+        const signals: ClothingSignal[] = (mentionsByChar.get(c.id) ?? [])
+          .map((m) => {
+            const note = wardrobeStateNote(m.stateChanges);
+            return [m.descriptionDelta?.trim(), note].filter(Boolean).join('; ');
+          })
+          .filter((t): t is string => Boolean(t))
+          .map((text) => ({ text }));
+        try {
+          const usage = await persistCharacterWardrobe(
+            db,
+            {
+              id: c.id,
+              name: c.name,
+              role: c.role,
+              wardrobeUpgraded: c.wardrobeUpgraded,
+              profile: (c.profile as CharacterProfile | null) ?? null,
+              signals,
+            },
+            extractor,
+          );
+          await incrementRunTokens(runId, usage.tokensIn, usage.tokensOut);
+          wardrobeCount++;
+        } catch (err) {
+          if (isSystemicLlmError(err)) throw err;
+          if (!(err instanceof StructuredOutputError) && !(err instanceof OllamaError)) throw err;
+          log(`wardrobe for '${c.name}' failed: ${(err as Error).message}`);
+        }
+      }
+      log(`wardrobe pass: ${wardrobeCount}/${eligible.length} eligible characters processed`);
+    }
+  } catch (err) {
+    if (isSystemicLlmError(err)) {
+      throw new Error(
+        `profiles: systemic Ollama failure (${(err as OllamaError).code}): ${redactSecrets((err as Error).message)}`,
+      );
+    }
+    // A non-systemic wardrobe failure must not sink the profiles stage.
+    log(`wardrobe stage skipped: ${(err as Error).message}`);
   }
 
   // -------------------------------------------------------------------------
