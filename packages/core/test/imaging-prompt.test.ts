@@ -1021,3 +1021,173 @@ describe('mature-content fidelity (imaging)', () => {
     });
   });
 });
+
+describe('wardrobe composition (body model + scene outfit)', () => {
+  // A character with the new wardrobe data: an immutable body model plus a
+  // scene-resolved outfit descriptor.
+  const bodied: CharacterForPrompt = {
+    name: 'Evie',
+    appearanceToken: 'Evie: young woman, lavender, practical work dress',
+    profile: profile({
+      age: 'young woman',
+      build: 'slender',
+      hair: 'lavender',
+      eyes: 'hazel',
+      attire: 'practical work dress',
+      distinguishing: 'ink-stained fingers',
+    }),
+    bodyModel: 'a slender young woman with long lavender hair and hazel eyes',
+    outfit: 'a crimson velvet ball gown',
+  };
+
+  describe('renderCharacterDescription', () => {
+    it('composes body model (verbatim) then the scene outfit (verbatim) as "{body}, wearing {outfit}"', () => {
+      expect(renderCharacterDescription(bodied)).toBe(
+        'a slender young woman with long lavender hair and hazel eyes, wearing a crimson velvet ball gown',
+      );
+    });
+
+    it('reproduces both the body model and the outfit verbatim (no paraphrase)', () => {
+      const out = renderCharacterDescription(bodied);
+      expect(out).toContain('a slender young woman with long lavender hair and hazel eyes');
+      expect(out).toContain('a crimson velvet ball gown');
+    });
+
+    it('does not double "wearing" when the outfit already starts with it', () => {
+      expect(
+        renderCharacterDescription({ ...bodied, outfit: 'wearing battered leather armor' }),
+      ).toBe(
+        'a slender young woman with long lavender hair and hazel eyes, wearing battered leather armor',
+      );
+    });
+
+    it('ignores the profile/appearanceToken when composing from wardrobe data', () => {
+      // The body+outfit substance wins; the old profile traits are not appended.
+      const out = renderCharacterDescription(bodied);
+      expect(out).not.toContain('ink-stained fingers');
+      expect(out).not.toContain('practical work dress');
+    });
+
+    // --- Fallback: byte-identical to the existing path when wardrobe data is
+    // missing. The existing renderCharacterDescription tests above already pin
+    // the exact strings; here we assert the new optional fields don't perturb
+    // them when absent/blank/half-present. ---
+    it('falls back byte-identically to the profile path when bodyModel is absent', () => {
+      const baseline = renderCharacterDescription(evie);
+      expect(renderCharacterDescription({ ...evie, outfit: 'a crimson velvet ball gown' })).toBe(
+        baseline,
+      );
+    });
+
+    it('falls back byte-identically when bodyModel is present but outfit is missing', () => {
+      const baseline = renderCharacterDescription(evie);
+      expect(
+        renderCharacterDescription({ ...evie, bodyModel: 'a slender young woman' }),
+      ).toBe(baseline);
+    });
+
+    it('falls back byte-identically when bodyModel/outfit are null or blank', () => {
+      const baseline = renderCharacterDescription(evie);
+      expect(renderCharacterDescription({ ...evie, bodyModel: null, outfit: null })).toBe(baseline);
+      expect(renderCharacterDescription({ ...evie, bodyModel: '   ', outfit: '   ' })).toBe(
+        baseline,
+      );
+    });
+
+    it('falls back byte-identically for a name-only character (no wardrobe data)', () => {
+      const c: CharacterForPrompt = { name: 'Quill', appearanceToken: null, profile: null };
+      expect(renderCharacterDescription({ ...c, bodyModel: null, outfit: null })).toBe('Quill');
+    });
+  });
+
+  describe('buildScenePrompt', () => {
+    it('weaves the composed body+outfit description verbatim into the cast clause', () => {
+      const { prompt } = buildScenePrompt({
+        scene: fullScene,
+        characters: [bodied],
+        style: painterly,
+      });
+      expect(prompt).toContain(
+        'Evie (a slender young woman with long lavender hair and hazel eyes, wearing a crimson velvet ball gown)',
+      );
+      looksLikeProse(prompt);
+    });
+
+    it('keeps the LoRA keyword adjacent to the wardrobe-composed character', () => {
+      const { prompt } = buildScenePrompt({
+        scene: fullScene,
+        characters: [{ ...bodied, loraKeyword: 'kariiina' }],
+        style: painterly,
+      });
+      expect(prompt).toContain(
+        'kariiina Evie (a slender young woman with long lavender hair and hazel eyes, wearing a crimson velvet ball gown)',
+      );
+    });
+
+    it('still applies position hints with wardrobe-composed characters (2 chars)', () => {
+      const tomBodied: CharacterForPrompt = {
+        ...tom,
+        bodyModel: 'a broad-shouldered weathered man with a grey beard',
+        outfit: 'a travel-worn cloak',
+      };
+      const { prompt } = buildScenePrompt({
+        scene: fullScene,
+        characters: [bodied, tomBodied],
+        style: painterly,
+      });
+      const evieAt = prompt.indexOf('crimson velvet ball gown');
+      const leftAt = prompt.indexOf('on the left');
+      const tomAt = prompt.indexOf('travel-worn cloak');
+      const rightAt = prompt.indexOf('on the right');
+      expect(leftAt).toBeGreaterThan(evieAt);
+      expect(rightAt).toBeGreaterThan(tomAt);
+      expect(leftAt).toBeLessThan(tomAt);
+    });
+
+    it('drops the body+outfit description under length pressure but keeps name + keyword', () => {
+      const wordy = (n: number, p: string) =>
+        Array.from({ length: n }, (_, i) => `${p}${i}`).join(' ');
+      const scene: SceneForPrompt = {
+        ...fullScene,
+        keyVisualMoment: wordy(175, 'moment'),
+        setting: wordy(40, 'place'),
+      };
+      const big: CharacterForPrompt = {
+        name: 'Evie',
+        appearanceToken: null,
+        profile: null,
+        loraKeyword: 'kariiina',
+        bodyModel: wordy(20, 'body'),
+        outfit: wordy(20, 'outfit'),
+      };
+      const { prompt } = buildScenePrompt({ scene, characters: [big], style: painterly });
+      expect(prompt).not.toContain('body0');
+      expect(prompt).not.toContain('outfit0');
+      expect(prompt).toContain('kariiina Evie');
+      expect(prompt).toContain('moment174');
+    });
+
+    it('is byte-identical to the profile-path baseline when no character has wardrobe data', () => {
+      const baseline = buildScenePrompt({
+        scene: fullScene,
+        characters: [evie, tom],
+        style: painterly,
+      });
+      const withNulls = buildScenePrompt({
+        scene: fullScene,
+        characters: [
+          { ...evie, bodyModel: null, outfit: null },
+          { ...tom, bodyModel: '   ', outfit: '   ' },
+        ],
+        style: painterly,
+      });
+      expect(withNulls).toEqual(baseline);
+    });
+
+    it('is deterministic with wardrobe data woven in', () => {
+      const a = buildScenePrompt({ scene: { ...fullScene }, characters: [{ ...bodied }], style: { ...painterly } });
+      const b = buildScenePrompt({ scene: { ...fullScene }, characters: [{ ...bodied }], style: { ...painterly } });
+      expect(a).toEqual(b);
+    });
+  });
+});

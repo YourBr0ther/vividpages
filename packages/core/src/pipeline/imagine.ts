@@ -346,6 +346,13 @@ interface IllustrationPointRow {
   presentCharacterIds: string[];
   /** LLM importance rank (1–5), when known; tightens 1–2 character framing. */
   score: number | null;
+  /**
+   * Per-character wardrobe-state assignment (chunk 3): characterId → the
+   * `character_appearance_states.id` this character wears in this scene. Null
+   * (or missing an id) → the scene-prompt builder falls back to the
+   * profile/appearance-token path for that character.
+   */
+  characterStates: Record<string, string> | null;
 }
 
 /**
@@ -388,14 +395,21 @@ async function loadIllustrationPoints(db: Db, bookId: string): Promise<Illustrat
       momentDescription: illustrationPoints.momentDescription,
       presentCharacterIds: illustrationPoints.presentCharacterIds,
       score: illustrationPoints.score,
+      characterStates: illustrationPoints.characterStates,
     })
     .from(illustrationPoints)
     .where(eq(illustrationPoints.bookId, bookId))
     .orderBy(asc(illustrationPoints.chapterId), asc(illustrationPoints.idx));
 }
 
-/** A scene-cast member: prompt fields + optional LoRA config (issue #2). */
-interface CastMember extends CharacterForPrompt, CharacterLora {}
+/**
+ * A scene-cast member: prompt fields + optional LoRA config (issue #2). Carries
+ * its `id` so the per-scene wardrobe state (illustration_points.characterStates)
+ * can be resolved to an outfit descriptor for THIS character (chunk 4).
+ */
+interface CastMember extends CharacterForPrompt, CharacterLora {
+  id: string;
+}
 
 /**
  * Loads the prompt cast for an illustration point: the present-character rows,
@@ -415,6 +429,7 @@ async function loadPointCast(
       name: characters.name,
       appearanceToken: characters.appearanceToken,
       profile: characters.profile,
+      bodyModel: characters.bodyModel,
       loraName: characters.loraName,
       loraKeyword: characters.loraKeyword,
       loraStrength: characters.loraStrength,
@@ -423,9 +438,13 @@ async function loadPointCast(
     .where(and(eq(characters.bookId, bookId), inArray(characters.id, characterIds)))
     .orderBy(desc(characters.sceneCount), asc(characters.createdAt));
   return rows.slice(0, SCENE_CAST_LIMIT).map((r) => ({
+    id: r.id,
     name: r.name,
     appearanceToken: r.appearanceToken,
     profile: sanitizedProfile(r.profile),
+    // Immutable body model (chunk 4). With a per-scene outfit it composes the
+    // verbatim "{bodyModel}, wearing {outfit}" description; null → fallback.
+    bodyModel: r.bodyModel,
     loraName: r.loraName,
     loraKeyword: r.loraKeyword,
     loraStrength: r.loraStrength,
@@ -623,6 +642,27 @@ async function loadCharacterStates(db: Db, bookId: string): Promise<Map<string, 
     byChar.set(r.characterId, entry);
   }
   return byChar;
+}
+
+/**
+ * Loads every appearance state's outfit descriptor for the book, keyed by the
+ * state's id (`character_appearance_states.id` → `.descriptor`). Used by the
+ * Phase-1 storyboard builder to resolve a point's per-character state
+ * assignment (illustration_points.characterStates: characterId → stateId) to
+ * the verbatim outfit descriptor woven into the scene prompt (chunk 4). A book
+ * with no states yields an empty map (every character falls back to the
+ * profile/appearance-token path). Pure read.
+ */
+async function loadStateDescriptors(db: Db, bookId: string): Promise<Map<string, string>> {
+  const rows = await db
+    .select({
+      id: characterAppearanceStates.id,
+      descriptor: characterAppearanceStates.descriptor,
+    })
+    .from(characterAppearanceStates)
+    .innerJoin(characters, eq(characters.id, characterAppearanceStates.characterId))
+    .where(eq(characters.bookId, bookId));
+  return new Map(rows.map((r) => [r.id, r.descriptor]));
 }
 
 /**
@@ -1307,6 +1347,10 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
   const portraitChars = await loadPortraitCharacters(db, bookId);
   const sceneRows = await loadAnalyzedScenes(db, bookId);
   const pointRows = await loadIllustrationPoints(db, bookId);
+  // stateId → outfit descriptor (chunk 4): resolves a point's per-character
+  // state assignment to the verbatim clothing woven into the scene prompt.
+  // Empty for pre-wardrobe books → every character takes the fallback path.
+  const stateDescriptors = await loadStateDescriptors(db, bookId);
 
   const portraitItem = (c: PortraitCharacter, step: string): WorkItem => {
     const { prompt, negative } = buildPortraitPrompt({
@@ -1342,9 +1386,21 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
     const chapterScenes = sceneRows.filter((s) => s.chapterId === point.chapterId);
     const ctx = sceneContextForOffset(chapterScenes, point.charOffset);
     const cast = await loadPointCast(db, bookId, point.presentCharacterIds);
+    // Resolve each present character's per-scene outfit (chunk 4): the point's
+    // characterStates map (characterId → stateId) → that state's verbatim
+    // outfit descriptor. With a bodyModel AND a resolved outfit the prompt
+    // composes "{bodyModel}, wearing {outfit}"; missing either → the builder
+    // falls back to the profile/appearance-token path byte-identically (so
+    // pre-wardrobe books and unassigned characters render exactly as before).
+    const states = point.characterStates ?? {};
+    const promptCast = cast.map((c) => {
+      const stateId = states[c.id];
+      const outfit = stateId ? (stateDescriptors.get(stateId) ?? null) : null;
+      return { ...c, outfit };
+    });
     const { prompt, negative } = buildScenePrompt({
-      // CastMember extends CharacterForPrompt, so loraKeyword flows through to
-      // be woven into each member's clause.
+      // CastMember extends CharacterForPrompt, so loraKeyword (and bodyModel +
+      // the resolved outfit) flow through to be woven into each member's clause.
       scene: {
         summary: point.momentDescription,
         setting: ctx.setting,
@@ -1353,7 +1409,7 @@ export async function runImagine(payload: ImagineJobPayload): Promise<void> {
         sceneType: ctx.sceneType,
         keyVisualMoment: point.momentDescription,
       },
-      characters: cast,
+      characters: promptCast,
       style: styleFragment,
       mature: book.matureContent,
       // Importance pulls a tight 1–2 character beat slightly tighter still.

@@ -35,6 +35,23 @@ export interface CharacterForPrompt {
    * Null/absent/blank → output is byte-identical to the no-keyword path.
    */
   loraKeyword?: string | null;
+  /**
+   * Optional immutable body-model descriptor (wardrobe Phase 2): the
+   * clothing-stripped physical identity reused verbatim across every
+   * generation of this character (`characters.bodyModel`). Composed with
+   * `outfit` into "{bodyModel}, wearing {outfit}" — but ONLY when BOTH are
+   * present. Absent/null/blank → the existing profile/appearanceToken path
+   * runs byte-identically (books predating the feature are unaffected).
+   */
+  bodyModel?: string | null;
+  /**
+   * Optional scene-resolved outfit descriptor (wardrobe Phase 2): the clothing
+   * the scene's assigned appearance state puts on the body model
+   * (`character_appearance_states.descriptor`). Woven verbatim after the body
+   * model. Absent/null/blank (or with no `bodyModel`) → fallback path,
+   * byte-identical to before.
+   */
+  outfit?: string | null;
 }
 
 /** The character's trigger keyword, trimmed; '' when null/absent/blank. */
@@ -256,9 +273,25 @@ function tokenBody(token: string): string {
  * The trait substance is the cross-image consistency mechanism (and the LoRA
  * anchor), so it is reproduced VERBATIM — woven into a sentence by the
  * builders, but never paraphrased or summarized away. Deterministic.
+ *
+ * Wardrobe Phase 2: when the character carries BOTH an immutable `bodyModel`
+ * and a scene-resolved `outfit`, the description is composed as the body model
+ * (verbatim, the immutable anchor) followed by the scene's clothing
+ * ("{bodyModel}, wearing {outfit}"), bypassing the profile/token path. With
+ * either field missing/blank it falls through to the existing behavior
+ * byte-identically — books generated before the feature render exactly as
+ * before.
  */
 export function renderCharacterDescription(c: CharacterForPrompt): string {
   const name = normalizeFragment(c.name);
+
+  const bodyModel = normalizeFragment(c.bodyModel ?? '');
+  const outfit = normalizeFragment(c.outfit ?? '');
+  if (bodyModel && outfit) {
+    // Body first (immutable identity), then the scene's clothing. `attirePhrase`
+    // adds the leading "wearing" (and any needed article) without doubling it.
+    return `${bodyModel}, ${attirePhrase(outfit)}`;
+  }
 
   if (c.profile) {
     const p = c.profile;
